@@ -17,7 +17,8 @@ export const cfg = {
   // Prefer installed Chrome on macOS; upstream's pinned 2024 Chromium build may no longer download.
   browserChannel: process.env.BROWSER_CHANNEL || (process.platform === 'darwin' && existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') ? 'chrome' : undefined),
   update: process.env.UPDATE != '0', // set to 0 to disable updating library
-  checkall: process.env.CHECKALL == '1', // set to 1 to check all books in the library list instead of stopping at the first book already found in db.json
+  checkall: process.env.CHECKALL != '0', // full scan by default; set 0 only if your library is strictly append-only
+  maxBooks: Math.max(0, Number(process.env.MAX_BOOKS) || 0), // limit download attempts across both libraries (0 = all)
   download: process.env.DOWNLOAD != '0', // set to 0 to disable downloading books
   audio: process.env.AUDIO != '0', // set to 0 to disable downloading audio
 };

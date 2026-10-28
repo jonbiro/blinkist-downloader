@@ -73,3 +73,64 @@ test('dry run leaves the output directory untouched', { skip: !hasFfmpeg }, () =
     assert.equal(fs.existsSync(path.join(root, 'books', 'mp3')), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('incomplete reader state never produces a deceptively complete MP3', { skip: !hasFfmpeg }, () => {
+  const root = mkRoot();
+  try {
+    const dir = createBook(root, ['Introduction']);
+    const manifestFile = path.join(dir, 'book.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    manifest.readerComplete = false;
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+    makeAudio(dir, 'Introduction');
+    const result = runExport(root);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /reader did not reach the final chapter/);
+    assert.equal(fs.existsSync(path.join(root, 'books', 'mp3')), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('missing chapter audio URL or broken media cannot be silently skipped', { skip: !hasFfmpeg }, () => {
+  const root = mkRoot();
+  try {
+    const dir = createBook(root, ['Introduction', 'Key idea 1']);
+    makeAudio(dir, 'Introduction');
+    makeAudio(dir, 'Key idea 1');
+    const manifestFile = path.join(dir, 'book.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    manifest.readerComplete = true;
+    manifest.chapters[1].audio = null;
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+    let result = runExport(root);
+    assert.match(result.stderr, /missing audio URL/);
+    manifest.chapters[1].audio = 'https://example.invalid/track.m4a';
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+    fs.writeFileSync(path.join(dir, 'Key idea 1.m4a'), Buffer.alloc(1000, 3));
+    result = runExport(root);
+    assert.match(result.stderr, /not valid audio/);
+    assert.equal(fs.existsSync(path.join(root, 'books', 'mp3')), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('indexed chapter filenames work and very long titles still fit in a filename', { skip: !hasFfmpeg }, () => {
+  const root = mkRoot();
+  try {
+    const dir = createBook(root, ['Introduction', 'Summary']);
+    const manifestFile = path.join(dir, 'book.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    manifest.title = '🚀'.repeat(90);
+    manifest.author = 'Author'.repeat(40);
+    manifest.readerComplete = true;
+    manifest.chapters.forEach((c, i) => {
+      c.fileName = String(i + 1).padStart(3, '0') + ' - ' + c.name + '.m4a';
+      makeAudio(dir, c.fileName.slice(0, -4));
+    });
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+    const result = runExport(root);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /1 exported/);
+    const out = fs.readdirSync(path.join(root, 'books', 'mp3'));
+    assert.equal(out.length, 1);
+    assert.ok(Buffer.byteLength(out[0], 'utf8') <= 230);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

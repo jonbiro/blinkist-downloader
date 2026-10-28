@@ -1,115 +1,75 @@
-# blinkist-downloader
+# Blinkist Downloader (2026 maintenance fork)
 
-Uses Playwright to download book summaries (text and audio) from blinkist.com.
+Fork of [Ralf Vogler's blinkist-downloader](https://github.com/vogler/blinkist-downloader), licensed **AGPL-3.0-only**. It uses Playwright to inspect your **Saved** and **Finished** Blinkist web libraries. It also includes an **offline MP3 exporter** for accessible M4A chapter files already saved on your computer.
 
-Usage:
-1. Install https://nodejs.org
-1. Clone this repository and `cd` into it
-1. `npm install`
-1. `npm start`
+> **Status:** MP3 export and its offline tests work. Blinkist's current authenticated book reader and audio URLs **have not been tested in 2026**. Expect that its web UI may have changed. The program does not bypass login, paywalls, or DRM. Only download/export material where you have permission; Blinkist's terms may prohibit copying.
 
-What will it do?
-1. Go through https://www.blinkist.com/en/app/library/saved and https://www.blinkist.com/en/app/library/finished
-to check for newly added books to these lists and save them to `books/db.json`.
-1. Go through all books from `books/db.json` and download their text (`book.json`) and audio (each chapter as `.m4a`) to `books/{saved,finished}`.
+## Quick start on macOS
 
-A book summary including audio is around 20MB depending on its length.
+Google Chrome and FFmpeg are supported. The application uses installed Google Chrome automatically on macOS, avoiding an unavailable older Chromium download.
 
-Caveat: Downloading a book will also put it in blinkist's finished list (despite resetting it to the beginning) and I've found no way of removing books from the list. To avoid having the same book downloaded both as saved and finished, only books that are not in saved will be added to finished.
+1. Install [Node.js 22+](https://nodejs.org/) and FFmpeg (`brew install ffmpeg`).
+2. In this repository, run `npm ci --ignore-scripts` and `npm run doctor`.
+3. **Safest first test:** run `MAX_BOOKS=1 npm start`. A browser window will open for you to sign in and complete any verification yourself.
+4. If audio was downloaded successfully, preview conversion with `npm run export:mp3 -- --dry-run`.
+5. Export with `npm run export:mp3`. Copy the files from `books/mp3/` to your MP3 player.
 
-Example:
-```console
-$ ls books/saved/how-to-avoid-a-climate-disaster-en
- Introduction.m4a  'Key idea 2.m4a'  'Key idea 4.m4a'  'Key idea 6.m4a'  'Key idea 8.m4a'   book.json
-'Key idea 1.m4a'   'Key idea 3.m4a'  'Key idea 5.m4a'  'Key idea 7.m4a'   Summary.m4a       cover.png
-```
-```json
-{
-  "id": "how-to-avoid-a-climate-disaster-en",
-  "title": "How to Avoid a Climate Disaster",
-  "author": "Bill Gates",
-  "description": "The Solutions We Have and the Breakthroughs We Need",
-  "duration": 30,
-  "rating": 4.6,
-  "url": "https://www.blinkist.com/en/app/books/how-to-avoid-a-climate-disaster-en",
-  "img": "https://images.blinkist.io/images/books/604241286cee070007be7d17/1_1/640.png",
-  "ratings": "4.5 (456 ratings)",
-  "durationDetail": "30 mins",
-  "categories": [
-    "Technology & the Future",
-    "Nature & the Environment"
-  ],
-  "descriptionLong": "<p><em>How to Avoid a Climate Disaster </em>(2021) is a guidebook to getting the world to an important milestone: zero greenhouse gas emissions. Bill Gates shares the knowledge he’s gained through his role on international climate commissions and as a go-to source of funding for climate solution startups. He pinpoints the ideas that show the most promise and explains the work that still needs to be done.&nbsp;</p>",
-  "authorDetails": "<p>Bill Gates is a business leader, philanthropist, and cofounder of Microsoft. Along with his wife, he is the cochair of the Bill &amp; Melinda Gates Foundation, which is dedicated to fighting poverty and related health issues around the world. He is also a founder of Breakthrough Energy, a group of organizations that strive to push forward clean energy products and initiatives.</p>",
-  "contentState": {
-    "progress": 0,
-    "addedToLibraryAt": "2024-05-22T22:49:09.000Z",
-    "lastConsumedAt": null,
-    "firstCompletedAt": null
-  },
-  "downloadDate": "2024-05-22T23:24:33.238Z",
-  "orgChapter": "Introduction",
-  "chapters": [...]
-}
-```
+On Linux, install Chromium using `npx playwright install chromium`, or specify `BROWSER_CHANNEL=chrome` if Chrome is installed.
 
-TODO: UI to view downloaded books.
+### Before downloading anything
 
+Run `DRYRUN=1 npm start` to inspect library listings without saving book metadata or audio files (a browser profile may still be written). Or run `DOWNLOAD=0 npm start` to update only the `books/db.json` library index.
 
-### Log
+**Do not run an unlimited download as your first test.** `MAX_BOOKS=1` limits the downloader to one book across both lists; omit it only when you've verified a single book.
 
-Tried https://github.com/leoncvlt/blinkist-scraper, but only failed with exceptions.
+## Commands
 
-<details>
-<summary>Details</summary>
+| Command | What it does |
+|---|---|
+| `npm run doctor` | Checks Node.js, FFmpeg, FFprobe, and the local browser setup without logging into Blinkist |
+| `MAX_BOOKS=1 npm start` | Test up to one pending book; manual Blinkist login |
+| `DOWNLOAD=0 npm start` | Update library index only |
+| `DRYRUN=1 npm start` | Preview without writing book files |
+| `npm run export:mp3 -- --dry-run` | Preview local MP3 conversions |
+| `npm run export:mp3` | Convert complete local books to MP3 |
+| `npm run export:mp3 -- --force` | Re-export existing MP3s |
+| `npm run check` | TypeScript type-check of the downloader |
+| `npm test` | Run offline storage and media conversion tests |
 
-> Python tool to download book summaries and audio from Blinkist.com, and generate some pretty output
+Configure environment variables in your shell or a local `.env` file (which is ignored by Git).
 
-> This script uses ChromeDriver to automate the Google Chrome browser - therefore Google Chrome needs to be installed in order to work.
+| Variable | Default | Purpose |
+|---|---|---|
+| `MAX_BOOKS` | `0` (unlimited) | Limit pending download attempts across both library lists |
+| `UPDATE` | `1` | Set `0` to skip refreshing library lists |
+| `DOWNLOAD` | `1` | Set `0` to skip downloading books |
+| `DRYRUN` | `0` | Preview without writing book data or media |
+| `AUDIO` | `1` | Set `0` to save text/metadata only |
+| `CHECKALL` | `1` | Full library scan; set `0` for the faster but potentially incomplete legacy early-stop behavior |
+| `SHOW` | `1` | Visible browser; needed for interactive sign-in |
+| `BROWSER_CHANNEL` | Chrome on macOS | Override Playwright browser channel |
+| `BROWSER_DIR` | `browser` | Persistent local browser profile |
+| `BOOKS_DIR` | `books` | Input directory for offline MP3 exporter |
+| `MP3_DIR` | `books/mp3` | Output MP3 directory |
 
+## File layout
 
-```
-bs ❯  python3 blinkistscraper <email> <password>
-[23:24:59] INFO Starting scrape run...
-[23:24:59] INFO Initialising chromedriver at None...
-[23:24:59] ERROR expected str, bytes or os.PathLike object, not NoneType
-Traceback (most recent call last):
-  File "/Users/voglerr/blinkist-scraper/blinkistscraper/__main__.py", line 412, in <module>
-    main()
-  File "/Users/voglerr/blinkist-scraper/blinkistscraper/__main__.py", line 319, in main
-    driver = scraper.initialize_driver(
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/voglerr/blinkist-scraper/blinkistscraper/scraper.py", line 98, in initialize_driver
-    driver = webdriver.Chrome(
-             ^^^^^^^^^^^^^^^^^
-  File "/Users/voglerr/blinkist-scraper/bs/lib/python3.11/site-packages/seleniumwire/webdriver/browser.py", line 96, in __init__
-    super().__init__(*args, **kwargs)
-  File "/Users/voglerr/blinkist-scraper/bs/lib/python3.11/site-packages/selenium/webdriver/chrome/webdriver.py", line 73, in __init__
-    self.service.start()
-  File "/Users/voglerr/blinkist-scraper/bs/lib/python3.11/site-packages/selenium/webdriver/common/service.py", line 72, in start
-    self.process = subprocess.Popen(cmd, env=self.env,
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/lib/python3.11/subprocess.py", line 1026, in __init__
-    self._execute_child(args, executable, preexec_fn, close_fds,
-  File "/opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/lib/python3.11/subprocess.py", line 1824, in _execute_child
-    and os.path.dirname(executable)
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<frozen posixpath>", line 152, in dirname
-TypeError: expected str, bytes or os.PathLike object, not NoneType
-[23:24:59] CRITICAL Uncaught Exception. Exiting...
-```
-</details>
+- `books/db.json`: library listing.
+- `books/saved/{book-id}/book.json`: chapter manifest, HTML text, optional metadata, and reader completeness status.
+- `books/saved/{book-id}/*.m4a`: saved audio chapters (also under `books/finished/`).
+- `books/mp3/*.mp3`: one MP3 per complete book.
+- `browser/`: saved login session, private to your computer.
 
-## MP3 player export (2026 repair)
+**Incomplete downloads are never intentionally exported as complete books.** Missing URLs, invalid audio tracks, duplicate filenames, and interrupted reader traversal are reported and skipped. Existing valid chapter files are reused when possible.
 
-This fork includes defensive handling for changed Blinkist pages, resume support for incomplete downloads, and offline MP3 conversion of existing local M4A chapter files.
+See [MP3_EXPORT.md](MP3_EXPORT.md) for compatibility details. The `viewer/` directory is the original upstream experimental viewer and is not part of the MP3 workflow.
 
-1. Install Node.js and FFmpeg (`brew install ffmpeg` on macOS), then `npm install`.
-2. On macOS, the downloader automatically uses Google Chrome if installed; on other systems install Playwright Chromium as needed with `npx playwright install chromium`. You can override the browser channel via `BROWSER_CHANNEL=chrome` or another supported channel.
-3. Run `npm start` and sign in to Blinkist using the visible browser window.
-4. Run `npm run export:mp3` to combine downloaded chapters into a single MP3 per book under `books/mp3/`.
-5. Copy your MP3 files to your music player. Run `npm run test:mp3` for exporter checks.
+## Limitations
 
-You can preview without converting with `npm run export:mp3 -- --dry-run`. See [MP3_EXPORT.md](./MP3_EXPORT.md) for details, limitations, and troubleshooting.
+- Downloaded titles in the **mobile app** are not necessarily identical to the web Saved/Finished lists.
+- The reader navigation may update your Blinkist reading progress or Finished list, even if a download is interrupted.
+- A changed web interface may prevent a download despite passing offline tests. If so, the downloader should warn or mark the book incomplete; it is **not** proven functional against the live Blinkist website.
+- Legacy `book.json` files created before the completeness marker are best-effort; a previous version may have created partial metadata.
+- Do not commit `books/`, `browser/`, or `.env`; they can contain copyrighted content and private session data.
 
-**Status:** MP3 export has automated local tests. The end-to-end Blinkist web reader and audio URLs have **not been validated** against a current logged-in Blinkist session; Blinkist may have changed its reader or may restrict exporting under its terms.
+Original project and license: [vogler/blinkist-downloader](https://github.com/vogler/blinkist-downloader).

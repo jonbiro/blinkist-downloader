@@ -2,3 +2,5 @@ node_modules/
 browser/
 books/
 .env
+.DS_Store
+.env.local

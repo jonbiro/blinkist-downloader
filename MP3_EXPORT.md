@@ -1,31 +1,43 @@
-# Blinkist downloader — 2026 repair and MP3 export
+# MP3 export: usage and limitations
 
-This is a patch for the open-source [vogler/blinkist-downloader](https://github.com/vogler/blinkist-downloader) project (AGPL-3.0-only). The changes are intended for use only where downloading and copying the content is authorized. Blinkist's subscription terms may restrict exporting its material. This patch does not bypass authentication, paywalls, or digital rights management (DRM).
+The exporter converts **existing local M4A chapter files** into one MP3 per book. It does not access Blinkist or bypass login/DRM. Only use it with content you may legally export.
 
-## What was changed
+## Commands
 
-- Fixes the January 2026 crash (`Cannot read properties of undefined (reading 'locator')`, issue #6): optional metadata sections no longer abort book processing.
-- Skips disabled/unavailable library cards and non-book items, including the problem reported in issue #4 and partially addressed by unmerged PR #5.
-- Makes optional GraphQL metadata nonblocking, handles missing reader/audio elements with actionable warnings, and stops chapter traversal loops if the page stops changing.
-- Resumes partial downloads, rather than skipping any existing book folder.
-- Verifies HTTP status and rejects obvious HTML/JSON error responses before writing media; retries failures and uses temporary files.
-- Adds `npm run export:mp3` to combine locally downloaded `.m4a` chapters into **one MP3 per book**. The MP3s are saved under `books/mp3/`, with title/author metadata.
+From the repository directory:
 
-## Usage
+1. `npm run doctor` — verify local prerequisites.
+2. `MAX_BOOKS=1 npm start` — optional one-book website test; you'll sign in manually.
+3. `npm run export:mp3 -- --dry-run` — preview which books are eligible.
+4. `npm run export:mp3` — export eligible books to `books/mp3/`.
+5. Copy the MP3 files to your music player over USB or its management software.
 
-1. Fork the upstream project on GitHub if you want to publish your own changes.
-2. Clone the upstream repo or your fork, apply `blinkist-fix.patch` with `git apply blinkist-fix.patch`, and run `npm install` (Node 22 or newer is recommended). Or copy the five updated/new files from the overlay archive into the cloned repository.
-3. Have FFmpeg installed: `brew install ffmpeg` on macOS, or `sudo apt install ffmpeg` on Ubuntu.
-4. Run `npm start` for supported Blinkist downloads. Sign in interactively using your **own subscription** when prompted. Do not put credentials in source files.
-5. Run `npm run export:mp3` to convert what was downloaded. Copy the contents of `books/mp3/` to your device.
-6. Run `npm run test:mp3` to test the local MP3 conversion. Run `npm run export:mp3 -- --dry-run` to preview exports. Use `--force` to regenerate existing MP3s.
+FFmpeg and FFprobe are required. On macOS install them with `brew install ffmpeg`.
 
-By default the exporter searches `books/saved` and `books/finished`. `BOOKS_DIR` can point to another downloads directory, and `MP3_DIR` can select a different destination.
+To replace files already exported, run `npm run export:mp3 -- --force`. To change paths, set `BOOKS_DIR` or `MP3_DIR` in the command environment.
 
-## Verification and limitations
+## How completeness is determined
 
-- The crash was identified directly in the original source and the selector access is now guarded.
-- The MP3 conversion was tested offline with real generated `.m4a` fixtures using FFmpeg. No Blinkist content was used in these tests.
-- **End-to-end downloading is not verified**: the updated, authenticated Blinkist 2026 reader and audio URL format cannot be inspected or tested without a Blinkist login. If the reader UI has changed more substantially, the script will warn `Reader UI unavailable/changed` or `No audio URLs found` rather than claim success. A live login session will be needed for the final integration fix.
-- The script accesses the **Saved and Finished web library lists**, not necessarily every item that is offline-downloaded in the mobile app.
-- Do not commit the `books/` or `browser/` folders; they can contain licensed content and private sessions.
+Each downloaded book has a `book.json` with the ordered chapter list. Modern manifests also have `readerComplete` and, for each chapter, `fileName`.
+
+- `readerComplete: false` means chapter traversal stopped early. **The MP3 is not produced.**
+- All chapters must have audio URLs and corresponding locally saved files. Missing chapters cause a skip rather than a partial export.
+- The exporter verifies that each source file actually contains decodable audio (using FFprobe) and validates the combined MP3 duration.
+- Failed transcoding never replaces an existing MP3; output is staged in a temporary file and renamed only after validation.
+- Older manifests without `readerComplete` are supported on a best-effort basis. Without a known manifest, legacy M4A files are sorted by their filenames; completeness cannot be guaranteed.
+
+If a book is skipped, read the reason in the output. To retry interrupted downloads, run `MAX_BOOKS=1 npm start` again (or remove the limit after a successful test). The downloader reuses chapters that already exist.
+
+## Filename and playback compatibility
+
+Output naming: `Book title - Author [book-id].mp3`. Long titles are shortened to stay within filesystem limits. Files use ID3v2.3 title and artist tags and are transcoded to MP3 by FFmpeg. Chapter files are concatenated in manifest order.
+
+The export format is intended for ordinary MP3 players but has not been tested on every model. This converter does not modify protected files or remove copy protection.
+
+## Limits of the current repair
+
+- Automated tests use generated audio samples, **not** actual Blinkist audio.
+- The live Blinkist login, pagination, reader selectors, audio URLs, and terms may have changed since upstream development. End-to-end web downloading remains **unverified**.
+- The web Saved/Finished lists may differ from titles downloaded for offline listening on a phone.
+- Browsing chapters can alter reading progress or move a title into Finished.
+- Browser profiles (`browser/`), download data (`books/`), and local `.env` files are Git-ignored. Do not upload them to public issues.
