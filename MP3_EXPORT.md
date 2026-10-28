@@ -1,6 +1,6 @@
-# MP3 export: usage and limitations
+# Offline audio export: MP3 and M4B audiobook
 
-The exporter converts **existing local M4A chapter files** into one MP3 per book. It does not access Blinkist or bypass login/DRM. Only use it with content you may legally export.
+The exporter converts **existing local M4A chapter files** into MP3, M4B (chaptered audiobook), or both, one file per book. It does not access Blinkist or bypass login/DRM. Only use it with content you may legally export.
 
 ## Commands
 
@@ -8,15 +8,19 @@ From the repository directory:
 
 1. `npm run doctor` — verify local prerequisites.
 2. `MAX_BOOKS=1 npm start` — optional one-book website test; you'll sign in manually.
-3. `npm run export:mp3 -- --dry-run` — preview which books are eligible.
-4. `npm run export:mp3` — export eligible books to `books/mp3/`.
-5. Copy the MP3 files to your music player over USB or its management software.
+3. `npm run export:both -- --dry-run` — preview eligible books without writing anything.
+4. `npm run export:mp3` — save MP3 files to `books/mp3/`.
+5. `npm run export:m4b` — save chaptered M4B audiobooks to `books/m4b/`.
+6. `npm run export:both` — make both formats from the same saved chapters.
+7. Transfer the format supported by your MP3 player or audiobook app.
 
 FFmpeg and FFprobe are required. On macOS install them with `brew install ffmpeg`.
 
-The exporter now **automatically rebuilds** an existing MP3 if its audio is corrupt, its source chapters or manifest are newer, its duration is implausible, or its title/artist tags are stale. Unchanged, verified MP3s are skipped. To replace every eligible MP3 regardless, run `npm run export:mp3 -- --force`. To change paths, set `BOOKS_DIR` or `MP3_DIR` in the command environment.
+The exporter automatically rebuilds an MP3 or M4B if it is corrupt, stale, abnormally short, or its metadata is outdated. For M4B, it additionally checks the chapter count/titles and expected cover artwork. Existing verified exports are skipped.
 
-Run `npm run verify:library` for a local inventory of complete/incomplete books and MP3 counts. To share only non-identifying counts when troubleshooting, use `npm run verify:library -- --json`. The inventory does not verify that each M4A can be decoded; the exporter performs that check.
+Use `npm run export:m4b -- --force` to rebuild every M4B or `npm run export:both -- --force` for both formats. Set `BOOKS_DIR` for input, `MP3_DIR` for MP3 output, or `M4B_DIR` for audiobook output.
+
+Run `npm run verify:library` for local counts of complete/incomplete books, MP3s, and M4Bs. To share only non-identifying counts when troubleshooting, use `npm run verify:library -- --json`. The inventory does not verify that each M4A can be decoded; the exporter performs that check.
 
 ### Experimental network-media fallback
 
@@ -41,9 +45,22 @@ Each downloaded book has a `book.json` with the ordered chapter list. Modern man
 
 If a book is skipped, read the reason in the output. To retry interrupted downloads, run `MAX_BOOKS=1 npm start` again (or remove the limit after a successful test). The downloader reuses chapters that already exist.
 
+## M4B audiobook details
+
+M4B contains AAC narration in an MP4 audiobook container. Chapter labels
+and start/end times are embedded based on the saved `book.json` manifest (or
+filenames for old downloads). It also includes title, author, album and
+Audiobook genre tags. If there is a valid `cover.jpg`, `cover.jpeg` or
+`cover.png` in the local book directory, artwork is embedded in the M4B.
+Otherwise the M4B remains a playable audio-only audiobook.
+
+M4B is ideal for Apple Books and many dedicated audiobook players, but a
+simple USB music player may support MP3 only. Converting to M4B does not
+modify or remove your original M4A chapters.
+
 ## Filename and playback compatibility
 
-Output naming: `Book title - Author [book-id].mp3`. Long titles are shortened to stay within filesystem limits. Files use ID3v2.3 title and artist tags and are transcoded to MP3 by FFmpeg. Chapter files are concatenated in manifest order.
+Output naming: `Book title - Author [book-id].mp3` or `.m4b`. Long titles are shortened to stay within filesystem limits. Files use ID3v2.3 title and artist tags and are transcoded to MP3 by FFmpeg. Chapter files are concatenated in manifest order.
 
 The export format is intended for ordinary MP3 players but has not been tested on every model. This converter does not modify protected files or remove copy protection.
 

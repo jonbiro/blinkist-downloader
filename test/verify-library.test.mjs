@@ -52,12 +52,14 @@ test('local inventory distinguishes complete, partial, legacy and unreadable dow
 
     fs.mkdirSync(path.join(booksDir, 'mp3'));
     fs.writeFileSync(path.join(booksDir, 'mp3', 'PRIVATE title.mp3'), Buffer.alloc(512, 1));
+    fs.mkdirSync(path.join(booksDir, 'm4b'));
+    fs.writeFileSync(path.join(booksDir, 'm4b', 'PRIVATE title.m4b'), Buffer.alloc(512, 1));
 
     const { summary, stdout } = run(booksDir);
     assert.deepEqual(summary, {
       saved: 2, finished: 3, complete: 1, incomplete: 1,
       legacyUnverified: 1, missingMetadata: 1, invalidMetadata: 1,
-      audioFiles: 2, mp3Files: 1,
+      audioFiles: 2, mp3Files: 1, m4bFiles: 1,
     });
     assert.doesNotMatch(stdout, /PRIVATE|secret\.m4a|complete-en|legacy-en/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

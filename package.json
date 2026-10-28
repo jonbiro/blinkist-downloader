@@ -13,15 +13,18 @@
   "type": "module",
   "scripts": {
     "start": "tsx ./index.ts",
-    "export:mp3": "node ./scripts/export-mp3.mjs",
+    "export:mp3": "node ./scripts/export-audio.mjs --format mp3",
     "test:mp3": "node --test ./test/export-mp3.test.mjs",
     "test:core": "node --import tsx --test ./test/book-files.test.ts ./test/audio-capture.test.ts",
-    "test": "npm run test:core && npm run test:inventory && npm run test:mp3",
+    "test": "npm run test:core && npm run test:inventory && npm run test:mp3 && npm run test:m4b",
     "check": "tsc --noEmit -p tsconfig.json",
     "doctor": "node ./scripts/doctor.mjs",
     "test:browser": "RUN_BROWSER_TESTS=1 node --import tsx --test ./test/audio-capture.browser.test.ts ./test/library-scan.browser.test.ts",
     "verify:library": "tsx ./scripts/verify-library.ts",
-    "test:inventory": "node --test ./test/verify-library.test.mjs"
+    "test:inventory": "node --test ./test/verify-library.test.mjs",
+    "export:m4b": "node ./scripts/export-audio.mjs --format m4b",
+    "export:both": "node ./scripts/export-audio.mjs --format both",
+    "test:m4b": "node --test ./test/export-m4b.test.mjs"
   },
   "dependencies": {
     "chalk": "^5.3.0",

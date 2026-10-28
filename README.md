@@ -1,8 +1,8 @@
 # Blinkist Downloader (2026 maintenance fork)
 
-Fork of [Ralf Vogler's blinkist-downloader](https://github.com/vogler/blinkist-downloader), licensed **AGPL-3.0-only**. It uses Playwright to inspect your **Saved** and **Finished** Blinkist web libraries. It also includes an **offline MP3 exporter** for accessible M4A chapter files already saved on your computer.
+Fork of [Ralf Vogler's blinkist-downloader](https://github.com/vogler/blinkist-downloader), licensed **AGPL-3.0-only**. It uses Playwright to inspect your **Saved** and **Finished** Blinkist web libraries. It also includes an **offline MP3 and M4B audiobook exporter** for accessible M4A chapter files already saved on your computer.
 
-> **Status:** MP3 export and its offline tests work. Blinkist's current authenticated book reader and audio URLs **have not been tested in 2026**. Expect that its web UI may have changed. The program does not bypass login, paywalls, or DRM. Only download/export material where you have permission; Blinkist's terms may prohibit copying.
+> **Status:** MP3/M4B exports and their offline tests work. Blinkist's current authenticated book reader and audio URLs **have not been tested in 2026**. Expect that its web UI may have changed. The program does not bypass login, paywalls, or DRM. Only download/export material where you have permission; Blinkist's terms may prohibit copying.
 
 ## Quick start on macOS
 
@@ -11,9 +11,9 @@ Google Chrome and FFmpeg are supported. The application uses installed Google Ch
 1. Install [Node.js 22+](https://nodejs.org/) and FFmpeg (`brew install ffmpeg`).
 2. In this repository, run `npm ci --ignore-scripts` and `npm run doctor`.
 3. **Safest first test:** run `MAX_BOOKS=1 npm start`. A browser window will open for you to sign in and complete any verification yourself.
-4. Run `npm run verify:library` to see how many chapter files and complete books you have locally.
-5. If audio was downloaded successfully, preview conversion with `npm run export:mp3 -- --dry-run`.
-6. Export with `npm run export:mp3`. Copy the files from `books/mp3/` to your MP3 player.
+4. Run `npm run verify:library` to see chapter, complete-book, MP3 and M4B counts.
+5. Preview conversion with `npm run export:both -- --dry-run`.
+6. Export using `npm run export:m4b` for a chaptered audiobook, `npm run export:mp3` for a basic music player, or `npm run export:both` for both.
 
 On Linux, install Chromium using `npx playwright install chromium`, or specify `BROWSER_CHANNEL=chrome` if Chrome is installed.
 
@@ -32,9 +32,11 @@ Run `DRYRUN=1 npm start` to inspect library listings without saving book metadat
 | `DOWNLOAD=0 npm start` | Update library index only |
 | `DRYRUN=1 npm start` | Preview without writing book files |
 | `npm run export:mp3 -- --dry-run` | Preview local MP3 conversions |
-| `npm run export:mp3` | Convert complete local books to MP3; automatically rebuild stale or invalid MP3s |
-| `npm run export:mp3 -- --force` | Re-export every eligible MP3, even when up to date |
-| `npm run verify:library` | Offline status of complete/incomplete books, chapters, and MP3 exports |
+| `npm run export:mp3` | One MP3 per complete book in `books/mp3/` |
+| `npm run export:m4b` | One chaptered M4B audiobook per book in `books/m4b/`, with cover art when available |
+| `npm run export:both` | Produce both MP3 and M4B from the same saved chapters |
+| `npm run export:m4b -- --force` | Re-export eligible M4Bs (also supported for MP3 or both formats) |
+| `npm run verify:library` | Offline counts of complete/incomplete books, chapters, MP3s and M4Bs |
 | `npm run verify:library -- --json` | Machine-readable local counts with no book titles or media URLs |
 | `npm run check` | TypeScript type-check of the downloader |
 | `npm run test:browser` | Chrome fixture tests for audio detection, pagination, and redacted diagnostics; no Blinkist login |
@@ -57,6 +59,24 @@ Configure environment variables in your shell or a local `.env` file (which is i
 | `DIAGNOSE` | `0` | Set `1` to show redacted reader-selector counts when a book is incomplete |
 | `BOOKS_DIR` | `books` | Input directory for offline MP3 exporter |
 | `MP3_DIR` | `books/mp3` | Output MP3 directory |
+| `M4B_DIR` | `books/m4b` | Output M4B audiobook directory |
+
+## Choosing MP3 or M4B
+
+**M4B** is intended for audiobook playback (for example, Apple Books and compatible
+audiobook players). Each file retains chapter markers such as Introduction,
+Key idea 1 and Summary, with title/author/album metadata and optional embedded
+cover art. A missing cover does not prevent conversion. **MP3** has wider
+compatibility with inexpensive USB music players, but the single-book MP3
+does not have navigable chapters. Run `npm run export:both` to keep both formats.
+
+All exports are entirely offline and use only existing local M4A chapters.
+
+## No GitHub Actions usage
+
+GitHub Actions is disabled for this repository, and the workflow was deleted
+at the owner's request. No GitHub Actions runs are triggered by pushes.
+Run `npm run check`, `npm test`, and `npm run test:browser` locally instead.
 
 ## Network audio fallback (experimental)
 
@@ -92,11 +112,12 @@ When the reader changes or audio cannot be located, use `DIAGNOSE=1 MAX_BOOKS=1 
 - `books/saved/{book-id}/book.json`: chapter manifest, HTML text, optional metadata, and reader completeness status.
 - `books/saved/{book-id}/*.m4a`: saved audio chapters (also under `books/finished/`).
 - `books/mp3/*.mp3`: one MP3 per complete book.
+- `books/m4b/*.m4b`: AAC audiobooks with chapter markers, title/author/album tags, and embedded artwork when available.
 - `browser/`: saved login session, private to your computer.
 
 **Incomplete downloads are never intentionally exported as complete books.** Missing URLs, invalid audio tracks, duplicate filenames, and interrupted reader traversal are reported and skipped. Existing valid chapter files are reused when possible.
 
-See [MP3_EXPORT.md](MP3_EXPORT.md) for compatibility details. The `viewer/` directory is the original upstream experimental viewer and is not part of the MP3 workflow.
+See [the audio export guide](MP3_EXPORT.md) for MP3/M4B compatibility and chapter metadata details. The `viewer/` directory is the original upstream experimental viewer and is not part of the MP3 workflow.
 
 ## Limitations
 

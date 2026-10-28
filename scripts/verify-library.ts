@@ -17,12 +17,13 @@ type Summary = {
   invalidMetadata: number;
   audioFiles: number;
   mp3Files: number;
+  m4bFiles: number;
 };
 
 const summary: Summary = {
   saved: 0, finished: 0, complete: 0, incomplete: 0,
   legacyUnverified: 0, missingMetadata: 0, invalidMetadata: 0,
-  audioFiles: 0, mp3Files: 0,
+  audioFiles: 0, mp3Files: 0, m4bFiles: 0,
 };
 
 for (const list of ['saved', 'finished'] as const) {
@@ -59,11 +60,16 @@ for (const list of ['saved', 'finished'] as const) {
   }
 }
 
-const mp3Dir = path.join(booksDir, 'mp3');
-if (fs.existsSync(mp3Dir)) {
-  summary.mp3Files = fs.readdirSync(mp3Dir)
-    .filter(file => file.toLowerCase().endsWith('.mp3') &&
-      validMediaFile(path.join(mp3Dir, file))).length;
+for (const [format, field, variable] of [
+  ['mp3', 'mp3Files', 'MP3_DIR'],
+  ['m4b', 'm4bFiles', 'M4B_DIR'],
+] as const) {
+  const dir = path.resolve(process.env[variable] || path.join(booksDir, format));
+  if (fs.existsSync(dir)) {
+    summary[field] = fs.readdirSync(dir)
+      .filter(file => file.toLowerCase().endsWith('.' + format) &&
+        validMediaFile(path.join(dir, file))).length;
+  }
 }
 
 if (jsonOutput) {
@@ -79,5 +85,6 @@ if (jsonOutput) {
     (summary.missingMetadata + summary.invalidMetadata));
   console.log('Local audio chapters: ' + summary.audioFiles);
   console.log('MP3s created: ' + summary.mp3Files);
+  console.log('M4B audiobooks created: ' + summary.m4bFiles);
   console.log('Inventory is local-only. File presence is not proof of decodable audio.');
 }
