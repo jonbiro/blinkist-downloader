@@ -16,6 +16,17 @@ FFmpeg and FFprobe are required. On macOS install them with `brew install ffmpeg
 
 To replace files already exported, run `npm run export:mp3 -- --force`. To change paths, set `BOOKS_DIR` or `MP3_DIR` in the command environment.
 
+### Experimental network-media fallback
+
+When Blinkist's player exposes only a `blob:` source, the downloader can
+observe ordinary HTTPS audio network responses during chapter navigation.
+Only one unambiguous response per chapter is accepted; uncertain matches
+leave the chapter incomplete. Signed media links are not printed to logs,
+but **the local book.json manifest may contain signed URLs**, so keep your
+`books/` directory private. To disable this feature, run
+`CAPTURE_AUDIO=0 MAX_BOOKS=1 npm start`. This does not bypass DRM or login,
+and has not been verified against a live October 2026 Blinkist session.
+
 ## How completeness is determined
 
 Each downloaded book has a `book.json` with the ordered chapter list. Modern manifests also have `readerComplete` and, for each chapter, `fileName`.

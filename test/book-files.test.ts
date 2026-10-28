@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  audioFileName, audioFilePath, confirmedReaderEnd, isCompleteManifest, selectAudioFileName, validBookId,
+  audioFileName, audioFilePath, confirmedReaderEnd, inferChapterLabel, isCompleteManifest, selectAudioFileName, validBookId,
 } from '../lib/book-files.js';
 
 test('partial reader traversal and missing tracks cannot count as complete', () => {
@@ -54,4 +54,12 @@ test('reader cannot claim completion just because the Next control disappeared',
   assert.equal(confirmedReaderEnd('Summary', 1), false);
   assert.equal(confirmedReaderEnd('Key idea 2', 3), false);
   assert.equal(confirmedReaderEnd('Summary', 4), true);
+});
+
+test('missing chapter labels are not silently misclassified as final Summary', () => {
+  assert.equal(inferChapterLabel(null, 'Key idea 3'), 'Unknown');
+  assert.equal(inferChapterLabel(null, null), 'Unknown');
+  assert.equal(inferChapterLabel(null, 'Summary'), 'Summary');
+  assert.equal(inferChapterLabel(null, 'Conclusion'), 'Summary');
+  assert.equal(inferChapterLabel('  Key idea 4  ', 'Summary'), 'Key idea 4');
 });

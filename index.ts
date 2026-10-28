@@ -5,8 +5,9 @@ import { context, page } from './playwright.js';
 import type { Page } from 'playwright-chromium';
 import fs from 'node:fs';
 import path from 'node:path';
-import { audioFilePath, confirmedReaderEnd, isCompleteManifest, selectAudioFileName, validBookId, validMediaFile, type AudioChapter } from './lib/book-files.js';
+import { audioFilePath, confirmedReaderEnd, inferChapterLabel, isCompleteManifest, selectAudioFileName, validBookId, validMediaFile, type AudioChapter } from './lib/book-files.js';
 import chalk from 'chalk';
+import { ChapterAudioMonitor, chooseAudioSource } from './lib/audio-capture.js';
 
 type library = 'saved' | 'finished';
 type book = {
@@ -224,65 +225,116 @@ const downloadBooks = async (page: Page, list: library = 'saved') => {
     const claimedFiles = new Set<string>();
     let readerComplete = false;
     let orgChapter: string | undefined;
-    const resp = await page.goto('https://www.blinkist.com/en/nc/reader/' + book.id);
-    if (resp?.ok() && await page.locator('.reader-content__text').first().waitFor({ timeout: 10000 }).then(() => true).catch(() => false)) {
-      // chapter number (Introduction, Key idea 1...), but last chapter (summary) has no name, so we time out and return Summary
-      const chapterNumber = () => page.locator('[data-test-id="currentChapterNumber"]').innerText({ timeout: 200 }).catch(() => 'Summary');
-      orgChapter = await chapterNumber();
-      console.log('Original chapter:', orgChapter);
-      const reset = async () => {
-        const chapter = await chapterNumber();
-        if (chapter === 'Introduction') return;
-        const menu = page.locator('[data-test-id="keyIdeas"]');
-        const links = page.locator('[data-test-id="chapterLink"]');
-        if (!(await menu.count())) return; // changed reader UI: keep available chapters
-        await menu.click();
-        if (!(await links.count())) return;
-        await links.first().click();
-        await page.waitForFunction(previous =>
-          document.querySelector('[data-test-id="currentChapterNumber"]')?.textContent?.trim() !== previous,
-          chapter, { timeout: 5000 }).catch(() => {});
-      }
-      await reset().catch(err => console.warn('Could not reset reader:', err));
-      const seen = new Set<string>();
-      for (let step = 0; step < 100; step++) {
-        const name = await chapterNumber();
-        const title = await page.locator('h2').first().innerText({ timeout: 3000 }).catch(() => name);
-        const content = page.locator('.reader-content__text').first();
-        const text = await content.innerHTML();
-        const key = name + ':' + title + ':' + text.slice(0, 100);
-        if (seen.has(key)) { console.warn('Reader repeated a chapter; marking this book incomplete:', book.id); break; }
-        seen.add(key);
-        const rawAudio = await page.locator('[data-test-id="readerAudio"]').first().getAttribute('audio-url', { timeout: 500 }).catch(() => null)
-          ?? await page.locator('audio').first().getAttribute('src', { timeout: 500 }).catch(() => null)
-          ?? await page.locator('audio source').first().getAttribute('src', { timeout: 500 }).catch(() => null);
-        let audio: string | null = null;
-        try { if (rawAudio) audio = new URL(rawAudio, page.url()).toString(); } catch { /* malformed URL */ }
-        if (audio && !audio.startsWith('https://')) audio = null;
-        const chapter: AudioChapter = { name, title, text, audio };
-        chapter.fileName = selectAudioFileName(chapter, chapters.length, bookDir, claimedFiles);
-        chapters.push(chapter);
-        console.log(name, title, audio ? 'audio available' : 'audio URL not found');
-        const nextBtn = page.locator('[data-test-id="nextChapter"]');
-        if (!(await nextBtn.isVisible().catch(() => false))) {
-          // Without a visible next button the UI may have changed, not necessarily ended.
-          // Require the known end-of-book Summary and evidence we advanced past chapter one.
-          readerComplete = confirmedReaderEnd(name, chapters.length);
-          if (!readerComplete) console.warn('Reader stopped before a confirmed Summary:', book.id);
-          break;
+    // DominicBoettger's 2025 network-capture idea, scoped to one book/reader.
+    // The response monitor never reads bodies or logs signed media URLs.
+    const audioMonitor = new ChapterAudioMonitor(page);
+    if (cfg.captureAudio) audioMonitor.start();
+    const usedAudioUrls = new Set<string>();
+    let mediaCheckpoint = audioMonitor.checkpoint();
+    try {
+      const resp = await page.goto('https://www.blinkist.com/en/nc/reader/' + book.id);
+      // These additional selectors are tentative fallbacks, not known current Blinkist selectors.
+      const readerContent = page.locator(
+        '.reader-content__text, [data-test-id="readerContent"], [data-test-id="reader-content"]'
+      ).first();
+      if (resp?.ok() && await readerContent.waitFor({ timeout: 10000 }).then(() => true).catch(() => false)) {
+        // The old summary lacked a number label. Don't assume any missing label means Summary.
+        const chapterNumber = async () => {
+          const number = await page.locator('[data-test-id="currentChapterNumber"]').first()
+            .innerText({ timeout: 200 }).catch(() => null);
+          const heading = number ? null : await page.locator('h2').first()
+            .innerText({ timeout: 500 }).catch(() => null);
+          return inferChapterLabel(number, heading);
+        };
+        orgChapter = await chapterNumber();
+        console.log('Original chapter:', orgChapter);
+        const reset = async () => {
+          const chapter = await chapterNumber();
+          if (chapter === 'Introduction') return;
+          const menu = page.locator('[data-test-id="keyIdeas"]');
+          const links = page.locator('[data-test-id="chapterLink"]');
+          if (!(await menu.count())) return; // changed reader UI: keep available chapters
+          await menu.click();
+          if (!(await links.count())) return;
+          await links.first().click();
+          await page.waitForFunction(previous =>
+            document.querySelector('[data-test-id="currentChapterNumber"]')?.textContent?.trim() !== previous,
+            chapter, { timeout: 5000 }).catch(() => {});
         }
-        await nextBtn.click();
-        const advanced = await page.waitForFunction(previous =>
-          document.querySelector('.reader-content__text')?.innerHTML !== previous,
-          text, { timeout: 5000 }).then(() => true).catch(() => false);
-        if (!advanced) {
-          console.warn('Reader did not advance. Saved chapters will be marked incomplete:', book.id);
-          break;
+        await reset().catch(err => console.warn('Could not reset reader:', err));
+        const seen = new Set<string>();
+        for (let step = 0; step < 100; step++) {
+          const name = await chapterNumber();
+          const title = await page.locator('h2').first().innerText({ timeout: 3000 }).catch(() => name);
+          const content = readerContent;
+          const text = await content.innerHTML();
+          const key = name + ':' + title + ':' + text.slice(0, 100);
+          if (seen.has(key)) { console.warn('Reader repeated a chapter; marking this book incomplete:', book.id); break; }
+          seen.add(key);
+          const audioAttributes = await Promise.all([
+            page.locator('[data-test-id="readerAudio"]').first().getAttribute('audio-url', { timeout: 500 }).catch(() => null),
+            page.locator('audio').first().getAttribute('src', { timeout: 500 }).catch(() => null),
+            page.locator('audio source').first().getAttribute('src', { timeout: 500 }).catch(() => null),
+          ]);
+          // Prefer an actual HTTPS URL over blob:/data: placeholders.
+          const rawAudio = audioAttributes.find(value => {
+            if (!value) return false;
+            try { return new URL(value, page.url()).protocol === 'https:'; }
+            catch { return false; }
+          }) ?? audioAttributes.find(Boolean) ?? null;
+          if (cfg.captureAudio && (!rawAudio || rawAudio.startsWith('blob:'))) {
+            await page.waitForTimeout(250);
+            if (audioMonitor.since(mediaCheckpoint).length === 0) {
+              await page.waitForTimeout(750);
+            }
+          }
+          const choice = chooseAudioSource(
+            rawAudio, page.url(), audioMonitor.since(mediaCheckpoint), usedAudioUrls
+          );
+          const audio = choice.url;
+          if (audio) usedAudioUrls.add(audio);
+          const chapter: AudioChapter = { name, title, text, audio, audioSource: choice.source };
+          chapter.fileName = selectAudioFileName(chapter, chapters.length, bookDir, claimedFiles);
+          chapters.push(chapter);
+          if (choice.reason === 'ambiguous-network') {
+            console.warn('Multiple audio responses for this chapter; refusing to guess:', name);
+          }
+          console.log(name, title, audio ? 'audio via ' + choice.source : 'audio URL not found');
+          // Download while signed URLs are fresh, instead of collecting every URL first.
+          if (cfg.audio && audio) {
+            const file = audioFilePath(bookDir, chapter);
+            if (file && !validMediaFile(file)) {
+              await downloadFile(audio, file).catch(error =>
+                console.warn('Audio failed for ' + book.id + ' / ' + name + ':', error));
+            }
+          }
+          // The following network window begins immediately before chapter navigation.
+          mediaCheckpoint = audioMonitor.checkpoint();
+          const nextBtn = page.locator('[data-test-id="nextChapter"]');
+          if (!(await nextBtn.isVisible().catch(() => false))) {
+            // Without a visible next button the UI may have changed, not necessarily ended.
+            // Require the known end-of-book Summary and evidence we advanced past chapter one.
+            readerComplete = confirmedReaderEnd(name, chapters.length);
+            if (!readerComplete) console.warn('Reader stopped before a confirmed Summary:', book.id);
+            break;
+          }
+          await nextBtn.click();
+          const advanced = await page.waitForFunction(previous =>
+            document.querySelector(
+              '.reader-content__text, [data-test-id="readerContent"], [data-test-id="reader-content"]'
+            )?.innerHTML !== previous,
+            text, { timeout: 5000 }).then(() => true).catch(() => false);
+          if (!advanced) {
+            console.warn('Reader did not advance. Saved chapters will be marked incomplete:', book.id);
+            break;
+          }
         }
+        await reset().catch(() => {});
+      } else {
+        console.warn('Reader UI unavailable/changed:', book.id, page.url());
       }
-      await reset().catch(() => {});
-    } else {
-      console.warn('Reader UI unavailable/changed:', book.id, page.url());
+    } finally {
+      audioMonitor.stop(); // Never allow responses from later books to leak into this one.
     }
 
     fs.mkdirSync(bookDir, { recursive: true });

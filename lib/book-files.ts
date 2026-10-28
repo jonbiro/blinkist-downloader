@@ -6,6 +6,7 @@ export type AudioChapter = {
   title?: string;
   text?: string;
   audio?: string | null;
+  audioSource?: 'attribute' | 'network' | 'none';
   fileName?: string;
 };
 
@@ -22,6 +23,12 @@ export const safeChapterName = (name: string): string => {
     result += char;
   }
   return result.replace(/[. ]+$/g, '') || 'Chapter';
+};
+
+// A missing chapter-number element is not by itself proof that this is Summary.
+export const inferChapterLabel = (number: string | null, heading: string | null): string => {
+  if (number?.trim()) return number.trim();
+  return /^(?:summary|conclusion)$/i.test(heading?.trim() ?? '') ? 'Summary' : 'Unknown';
 };
 
 export const confirmedReaderEnd = (name: string, visitedChapters: number): boolean =>

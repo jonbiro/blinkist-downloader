@@ -15,10 +15,11 @@
     "start": "tsx ./index.ts",
     "export:mp3": "node ./scripts/export-mp3.mjs",
     "test:mp3": "node --test ./test/export-mp3.test.mjs",
-    "test:core": "node --import tsx --test ./test/book-files.test.ts",
+    "test:core": "node --import tsx --test ./test/book-files.test.ts ./test/audio-capture.test.ts",
     "test": "npm run test:core && npm run test:mp3",
     "check": "tsc --noEmit -p tsconfig.json",
-    "doctor": "node ./scripts/doctor.mjs"
+    "doctor": "node ./scripts/doctor.mjs",
+    "test:browser": "RUN_BROWSER_TESTS=1 node --import tsx --test ./test/audio-capture.browser.test.ts"
   },
   "dependencies": {
     "chalk": "^5.3.0",

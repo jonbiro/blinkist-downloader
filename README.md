@@ -34,6 +34,7 @@ Run `DRYRUN=1 npm start` to inspect library listings without saving book metadat
 | `npm run export:mp3` | Convert complete local books to MP3 |
 | `npm run export:mp3 -- --force` | Re-export existing MP3s |
 | `npm run check` | TypeScript type-check of the downloader |
+| `npm run test:browser` | Optional Chrome test with mocked media responses, no Blinkist login |
 | `npm test` | Run offline storage and media conversion tests |
 
 Configure environment variables in your shell or a local `.env` file (which is ignored by Git).
@@ -49,8 +50,29 @@ Configure environment variables in your shell or a local `.env` file (which is i
 | `SHOW` | `1` | Visible browser; needed for interactive sign-in |
 | `BROWSER_CHANNEL` | Chrome on macOS | Override Playwright browser channel |
 | `BROWSER_DIR` | `browser` | Persistent local browser profile |
+| `CAPTURE_AUDIO` | `1` | Set `0` to turn off the experimental network audio fallback |
 | `BOOKS_DIR` | `books` | Input directory for offline MP3 exporter |
 | `MP3_DIR` | `books/mp3` | Output MP3 directory |
+
+## Network audio fallback (experimental)
+
+A December 2025 fork by DominicBoettger used browser network responses as a
+fallback when the Blinkist reader supplied only a `blob:` audio URL. Our fork
+now records candidate audio responses during **each individual chapter**, but
+only uses them when there is exactly one unambiguous HTTPS media candidate.
+It never assigns the last arbitrary response to a chapter or logs signed URLs.
+Ordinary audio files are downloaded as soon as a source becomes available.
+
+If a chapter has multiple candidate URLs, the program reports ambiguity and
+leaves the chapter incomplete rather than exporting the wrong audio. This
+fallback has **not** been tested on the current authenticated Blinkist website.
+
+- `CAPTURE_AUDIO=0 MAX_BOOKS=1 npm start` disables this fallback for comparison.
+- `npm run test:browser` runs an optional mocked Chrome test; it does not
+  contact Blinkist or require your account.
+- See [alternative downloader review](docs/alternative-downloaders.md) for
+  the DominicBoettger comparison and our security review of ErhardRainer's
+  manual Chrome extension.
 
 ## File layout
 

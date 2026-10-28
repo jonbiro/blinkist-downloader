@@ -21,4 +21,5 @@ export const cfg = {
   maxBooks: Math.max(0, Number(process.env.MAX_BOOKS) || 0), // limit download attempts across both libraries (0 = all)
   download: process.env.DOWNLOAD != '0', // set to 0 to disable downloading books
   audio: process.env.AUDIO != '0', // set to 0 to disable downloading audio
+  captureAudio: process.env.CAPTURE_AUDIO != '0', // observe ordinary HTTPS audio responses when reader exposes blob: sources
 };
