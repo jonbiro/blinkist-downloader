@@ -22,4 +22,5 @@ export const cfg = {
   download: process.env.DOWNLOAD != '0', // set to 0 to disable downloading books
   audio: process.env.AUDIO != '0', // set to 0 to disable downloading audio
   captureAudio: process.env.CAPTURE_AUDIO != '0', // observe ordinary HTTPS audio responses when reader exposes blob: sources
+  diagnose: process.env.DIAGNOSE == '1', // optional redacted selector diagnostics; no page HTML, URLs, cookies, or signed tokens
 };

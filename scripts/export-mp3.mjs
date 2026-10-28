@@ -26,8 +26,16 @@ const limitBytes = (name, limit) => {
   }
   return result || 'Untitled';
 };
-const safeChapterName = (name) => String(name)
-  .replace(/[\\/\x00-\x1f:*?"<>|]/g, '_').slice(0, 125).trim() || 'Chapter';
+// Match the downloader's UTF-8 byte-bound filename limit for legacy chapters.
+const safeChapterName = (name) => {
+  const cleaned = String(name).replace(/[\\/\x00-\x1f:*?"<>|]/g, '_').trim();
+  let result = '';
+  for (const char of cleaned) {
+    if (Buffer.byteLength(result + char, 'utf8') > 120) break;
+    result += char;
+  }
+  return result.replace(/[. ]+$/g, '') || 'Chapter';
+};
 const validFile = (file) => {
   try { const info = fs.statSync(file); return info.isFile() && info.size > 128; }
   catch { return false; }
@@ -96,10 +104,10 @@ function orderedTracks({ dir, book }) {
   return { tracks: legacy, reason: legacy.length ? null : 'no downloaded audio chapters' };
 }
 
-function probeAudio(file) {
+function probeAudioInfo(file) {
   const result = spawnSync(ffprobe, [
     '-v', 'error', '-select_streams', 'a:0',
-    '-show_entries', 'stream=codec_type:format=duration',
+    '-show_entries', 'stream=codec_type,codec_name:format=duration:format_tags=title,artist',
     '-of', 'json', file,
   ], { encoding: 'utf8', timeout: 15000 });
   if (result.status !== 0 || result.error) return null;
@@ -107,9 +115,32 @@ function probeAudio(file) {
     const info = JSON.parse(result.stdout);
     if (info.streams?.[0]?.codec_type !== 'audio') return null;
     const duration = Number(info.format?.duration);
-    return Number.isFinite(duration) && duration > 0 ? duration : null;
+    if (!Number.isFinite(duration) || duration <= 0) return null;
+    return { duration, codec: info.streams[0].codec_name, tags: info.format?.tags ?? {} };
   } catch {
     return null;
+  }
+}
+
+const probeAudio = (file) => probeAudioInfo(file)?.duration ?? null;
+
+// A filename existing is not enough: old MP3s can be truncated, invalid,
+// or stale relative to the downloaded chapters / chapter manifest.
+function isCurrentExport(dest, tracks, manifestFile, expectedDuration, title, author) {
+  if (!validFile(dest)) return false;
+  const output = probeAudioInfo(dest);
+  if (!output || output.codec !== 'mp3' ||
+      output.duration < expectedDuration * 0.85 ||
+      output.duration > expectedDuration * 1.15 ||
+      output.tags.title !== title || output.tags.artist !== author) {
+    return false;
+  }
+  try {
+    const outputModified = fs.statSync(dest).mtimeMs;
+    const inputs = [manifestFile, ...tracks];
+    return inputs.every(file => fs.statSync(file).mtimeMs <= outputModified);
+  } catch {
+    return false;
   }
 }
 
@@ -141,17 +172,19 @@ for (const entry of books) {
   const fileName = limitBytes(title, 100) + ' - ' + limitBytes(author, 55) +
     ' [' + limitBytes(id, 45) + '].mp3';
   const dest = path.join(outDir, fileName);
-  if (fs.existsSync(dest) && !force) {
-    console.log('Already exported: ' + dest);
-    skipped++;
-    continue;
-  }
   const durations = tracks.map(probeAudio);
   if (durations.some(duration => duration === null)) {
     console.warn('Skipping ' + title + ': one or more chapter files are not valid audio');
     skipped++;
     continue;
   }
+  const expectedDuration = durations.reduce((sum, duration) => sum + duration, 0);
+  if (!force && isCurrentExport(dest, tracks, path.join(entry.dir, 'book.json'), expectedDuration, title, author)) {
+    console.log('Already exported and verified: ' + dest);
+    skipped++;
+    continue;
+  }
+  if (fs.existsSync(dest)) console.log('Rebuilding stale or invalid existing MP3: ' + title);
   console.log((dryRun ? 'Would export ' : 'Exporting ') + tracks.length + ' chapters → ' + dest);
   if (dryRun) { exported++; continue; }
 
@@ -175,8 +208,8 @@ for (const entry of books) {
       throw new Error(result.stderr?.trim() || 'FFmpeg exited with code ' + result.status);
     }
     const outputDuration = probeAudio(tmpOutput);
-    const expectedDuration = durations.reduce((sum, duration) => sum + duration, 0);
-    if (!outputDuration || outputDuration < expectedDuration * 0.85) {
+    if (!outputDuration || outputDuration < expectedDuration * 0.85 ||
+        outputDuration > expectedDuration * 1.15) {
       throw new Error('Converted MP3 is unexpectedly short; possible missing chapters');
     }
     fs.renameSync(tmpOutput, dest);

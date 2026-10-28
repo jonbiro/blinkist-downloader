@@ -14,7 +14,9 @@ From the repository directory:
 
 FFmpeg and FFprobe are required. On macOS install them with `brew install ffmpeg`.
 
-To replace files already exported, run `npm run export:mp3 -- --force`. To change paths, set `BOOKS_DIR` or `MP3_DIR` in the command environment.
+The exporter now **automatically rebuilds** an existing MP3 if its audio is corrupt, its source chapters or manifest are newer, its duration is implausible, or its title/artist tags are stale. Unchanged, verified MP3s are skipped. To replace every eligible MP3 regardless, run `npm run export:mp3 -- --force`. To change paths, set `BOOKS_DIR` or `MP3_DIR` in the command environment.
+
+Run `npm run verify:library` for a local inventory of complete/incomplete books and MP3 counts. To share only non-identifying counts when troubleshooting, use `npm run verify:library -- --json`. The inventory does not verify that each M4A can be decoded; the exporter performs that check.
 
 ### Experimental network-media fallback
 

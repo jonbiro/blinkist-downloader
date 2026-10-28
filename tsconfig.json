@@ -13,6 +13,7 @@
     "config.ts",
     "playwright.ts",
     "lib/**/*.ts",
-    "test/**/*.ts"
+    "test/**/*.ts",
+    "scripts/**/*.ts"
   ]
 }

@@ -26,3 +26,7 @@ jobs:
         run: npm run check
       - name: Offline unit and conversion tests
         run: npm test
+      - name: Mocked Chrome browser tests (no Blinkist login)
+        run: npm run test:browser
+        env:
+          BROWSER_CHANNEL: chrome

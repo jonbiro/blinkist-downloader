@@ -8,6 +8,8 @@ import path from 'node:path';
 import { audioFilePath, confirmedReaderEnd, inferChapterLabel, isCompleteManifest, selectAudioFileName, validBookId, validMediaFile, type AudioChapter } from './lib/book-files.js';
 import chalk from 'chalk';
 import { ChapterAudioMonitor, chooseAudioSource } from './lib/audio-capture.js';
+import { scanLibrary } from './lib/library-scan.js';
+import { collectReaderDiagnostics } from './lib/reader-diagnostics.js';
 
 type library = 'saved' | 'finished';
 type book = {
@@ -58,84 +60,14 @@ const login = async (page: Page) => {
 };
 
 const updateLibrary = async (page: Page, list: library = 'saved') => {
-  const dbList = db.data[list]; // sorted by date added ascending
-  // sorted by date added descending
-  const url = 'https://www.blinkist.com/en/app/library/' + list;
-  await page.goto(url);
-  const newBooks: book[] = [];
-  const knownIds = new Set(dbList.map(item => item.id));
-
-  console.log('Updating library:', url);
-  console.log(list, 'books in db.json:', dbList.length);
-
-  const nextBtn = page.locator('button:has-text("Next"):not([disabled])');
-  pages: do { // go through pages
-    // Ignore disabled/removed books and non-book cards (e.g. episodes).
-    const allCards = page.locator('a[data-test-id="book-card"]');
-    const cards = page.locator('a[data-test-id="book-card"]:not(.pointer-events-none)');
-    await allCards.first().waitFor({ timeout: 10000 }).catch(() => {});
-    const oldPage = await allCards.evaluateAll(els => els.map(el => el.getAttribute('href')).join('|'));
-    const books = await cards.all();
-    if (!books.length) {
-      console.warn(`No downloadable book cards found in ${list}. If your library is not empty, Blinkist may have changed its layout.`);
-    }
-    for (const book of books) {
-      const slug = await book.getAttribute('href');
-      if (!slug || !slug.includes('/app/books/')) continue;
-      const parsed = new URL(slug, 'https://www.blinkist.com');
-      const url = parsed.origin + parsed.pathname;
-      if (parsed.origin !== 'https://www.blinkist.com' || !parsed.pathname.startsWith('/en/app/books/')) {
-        console.warn('Ignoring off-site/non-book card:', url);
-        continue;
-      }
-      const id = parsed.pathname.split('/').pop() ?? '';
-      if (!validBookId(id)) { console.warn('Ignoring unsafe/invalid book ID:', id); continue; }
-      const title = await book.getAttribute('aria-label') ||
-        await book.locator('[data-test-id="title"]').textContent({ timeout: 500 }).catch(() => null);
-      if (!title) { console.warn('Skipping card without a title:', slug); continue; }
-      const img = await book.locator('img').getAttribute('src', { timeout: 500 }).catch(() => null) ?? '';
-      const author = await book.locator('[data-test-id="subtitle"]').innerText({ timeout: 1000 }).catch(() => '');
-      const description = await book.locator('[data-test-id="description"]').innerText({ timeout: 1000 }).catch(() => '');
-      const meta = (await book.locator('div.text-mid-grey.text-caption.mt-2').last().innerText({ timeout: 500 }).catch(() => '')).split('\n');
-      const duration = parseFloat(meta[0] ?? '') || 0;
-      const rating = parseFloat(meta[1] ?? '') || 0;
-      const item: book = { id, title: title.trim(), author, description, duration, rating, url, img };
-      if (knownIds.has(id)) {
-        if (!cfg.checkall) {
-          console.log('Stopping at book already found in db.json:', item);
-          break pages;
-        } else {
-          console.log('Book already in db.json:', item.id);
-        }
-      } else if (list === 'finished' && db.data.saved.find(i => i.id === id)) {
-        // after downloading a book (even with reset to start), it will also appear in finished list
-        // since we don't want to download it in finished as well, we skip it here
-        // TODO to mark a book as finished, move it from saved to finished in books/db.json and books/
-        console.log('Skipping book already in saved list:', item.id);
-      } else {
-        console.log('New book:', item);
-        newBooks.push(item);
-        knownIds.add(id);
-      }
-    }
-    if (await nextBtn.count()) {
-      await nextBtn.click();
-      try {
-        await page.waitForFunction(previous =>
-          [...document.querySelectorAll('a[data-test-id="book-card"]')]
-            .map(el => el.getAttribute('href')).join('|') !== previous,
-          oldPage, { timeout: 15000 });
-      } catch {
-        console.warn('Library pagination did not change; stopping to avoid an infinite loop.');
-        break;
-      }
-    } else break;
-  } while (true);
-  // add new books to db.json in reverse order
-  dbList.push(...newBooks.toReversed());
-  if (!cfg.dryrun) await db.write(); // read-only preview when DRYRUN=1
-  console.log('New books:', newBooks.length);
-  console.log();
+  const result = await scanLibrary(page, list, db.data[list], {
+    checkAll: cfg.checkall,
+    dryRun: cfg.dryrun,
+    savedIds: new Set(db.data.saved.map(item => item.id)),
+    checkpoint: () => db.write(),
+  });
+  console.log('Updated ' + list + ': ' + result.discovered + ' new books across ' +
+    result.pages + ' pages. Each completed page was checkpointed.');
 };
 
 const isComplete = (bookJson: string, bookDir: string) => {
@@ -331,10 +263,17 @@ const downloadBooks = async (page: Page, list: library = 'saved') => {
         }
         await reset().catch(() => {});
       } else {
-        console.warn('Reader UI unavailable/changed:', book.id, page.url());
+        console.warn('Reader UI unavailable/changed:', book.id);
       }
     } finally {
       audioMonitor.stop(); // Never allow responses from later books to leak into this one.
+    }
+
+    if (cfg.diagnose && (!readerComplete || chapters.some(chapter => !chapter.audio))) {
+      const diagnostics = await collectReaderDiagnostics(page).catch(() => null);
+      if (diagnostics) {
+        console.warn('Reader diagnostics (redacted; no HTML or URLs):', JSON.stringify(diagnostics));
+      }
     }
 
     fs.mkdirSync(bookDir, { recursive: true });

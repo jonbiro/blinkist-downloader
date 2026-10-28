@@ -11,8 +11,9 @@ Google Chrome and FFmpeg are supported. The application uses installed Google Ch
 1. Install [Node.js 22+](https://nodejs.org/) and FFmpeg (`brew install ffmpeg`).
 2. In this repository, run `npm ci --ignore-scripts` and `npm run doctor`.
 3. **Safest first test:** run `MAX_BOOKS=1 npm start`. A browser window will open for you to sign in and complete any verification yourself.
-4. If audio was downloaded successfully, preview conversion with `npm run export:mp3 -- --dry-run`.
-5. Export with `npm run export:mp3`. Copy the files from `books/mp3/` to your MP3 player.
+4. Run `npm run verify:library` to see how many chapter files and complete books you have locally.
+5. If audio was downloaded successfully, preview conversion with `npm run export:mp3 -- --dry-run`.
+6. Export with `npm run export:mp3`. Copy the files from `books/mp3/` to your MP3 player.
 
 On Linux, install Chromium using `npx playwright install chromium`, or specify `BROWSER_CHANNEL=chrome` if Chrome is installed.
 
@@ -31,10 +32,12 @@ Run `DRYRUN=1 npm start` to inspect library listings without saving book metadat
 | `DOWNLOAD=0 npm start` | Update library index only |
 | `DRYRUN=1 npm start` | Preview without writing book files |
 | `npm run export:mp3 -- --dry-run` | Preview local MP3 conversions |
-| `npm run export:mp3` | Convert complete local books to MP3 |
-| `npm run export:mp3 -- --force` | Re-export existing MP3s |
+| `npm run export:mp3` | Convert complete local books to MP3; automatically rebuild stale or invalid MP3s |
+| `npm run export:mp3 -- --force` | Re-export every eligible MP3, even when up to date |
+| `npm run verify:library` | Offline status of complete/incomplete books, chapters, and MP3 exports |
+| `npm run verify:library -- --json` | Machine-readable local counts with no book titles or media URLs |
 | `npm run check` | TypeScript type-check of the downloader |
-| `npm run test:browser` | Optional Chrome test with mocked media responses, no Blinkist login |
+| `npm run test:browser` | Chrome fixture tests for audio detection, pagination, and redacted diagnostics; no Blinkist login |
 | `npm test` | Run offline storage and media conversion tests |
 
 Configure environment variables in your shell or a local `.env` file (which is ignored by Git).
@@ -51,6 +54,7 @@ Configure environment variables in your shell or a local `.env` file (which is i
 | `BROWSER_CHANNEL` | Chrome on macOS | Override Playwright browser channel |
 | `BROWSER_DIR` | `browser` | Persistent local browser profile |
 | `CAPTURE_AUDIO` | `1` | Set `0` to turn off the experimental network audio fallback |
+| `DIAGNOSE` | `0` | Set `1` to show redacted reader-selector counts when a book is incomplete |
 | `BOOKS_DIR` | `books` | Input directory for offline MP3 exporter |
 | `MP3_DIR` | `books/mp3` | Output MP3 directory |
 
@@ -73,6 +77,14 @@ fallback has **not** been tested on the current authenticated Blinkist website.
 - See [alternative downloader review](docs/alternative-downloaders.md) for
   the DominicBoettger comparison and our security review of ErhardRainer's
   manual Chrome extension.
+
+## Library recovery and safe diagnostics
+
+The Saved/Finished scanner checkpoints newly discovered titles after **each completed page**, preserving earlier results if a later page fails. It fails rather than declaring an unfamiliar login page an empty library. `DRYRUN=1 npm start` previews the scan without saving library data.
+
+When the reader changes or audio cannot be located, use `DIAGNOSE=1 MAX_BOOKS=1 npm start` to print only counts of recognized reader/audio elements and URL *types*, never book text, query strings, signed media URLs, or cookies. This mode still needs you to sign in manually and may move a book into Finished; do not upload `browser/`, `books/`, or complete browser logs.
+
+`npm run verify:library` is completely offline and does not require a Blinkist login. It summarizes partial/complete downloads and MP3 count, but only checks file presence, not media decodability.
 
 ## File layout
 

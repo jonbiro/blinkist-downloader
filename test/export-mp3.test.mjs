@@ -134,3 +134,66 @@ test('indexed chapter filenames work and very long titles still fit in a filenam
     assert.ok(Buffer.byteLength(out[0], 'utf8') <= 230);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('repairs a corrupt MP3 instead of treating its filename as success', { skip: !hasFfmpeg }, () => {
+  const root = mkRoot();
+  try {
+    const dir = createBook(root, ['Introduction', 'Summary']);
+    makeAudio(dir, 'Introduction');
+    makeAudio(dir, 'Summary');
+    const first = runExport(root);
+    assert.equal(first.status, 0, first.stderr);
+    const outDir = path.join(root, 'books', 'mp3');
+    const output = path.join(outDir, fs.readdirSync(outDir).find(file => file.endsWith('.mp3')));
+    fs.writeFileSync(output, Buffer.alloc(1024, 1));
+    const second = runExport(root);
+    assert.equal(second.status, 0, second.stderr);
+    assert.match(second.stdout, /Rebuilding stale or invalid existing MP3/);
+    assert.match(second.stdout, /1 exported, 0 skipped, 0 failed/);
+    const probe = spawnSync('ffprobe', [
+      '-v', 'error', '-show_entries', 'stream=codec_name', '-of', 'json', output,
+    ], { encoding: 'utf8' });
+    assert.equal(probe.status, 0, probe.stderr);
+    assert.equal(JSON.parse(probe.stdout).streams[0].codec_name, 'mp3');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('rebuilds an MP3 when chapter sources are newer than the old output', { skip: !hasFfmpeg }, () => {
+  const root = mkRoot();
+  try {
+    const dir = createBook(root, ['Introduction']);
+    makeAudio(dir, 'Introduction');
+    const first = runExport(root);
+    assert.equal(first.status, 0, first.stderr);
+    const outDir = path.join(root, 'books', 'mp3');
+    const output = path.join(outDir, fs.readdirSync(outDir).find(file => file.endsWith('.mp3')));
+    // Simulates a previously-exported MP3 whose source was later updated.
+    const staleDate = new Date('2020-01-01T00:00:00.000Z');
+    fs.utimesSync(output, staleDate, staleDate);
+    const second = runExport(root);
+    assert.equal(second.status, 0, second.stderr);
+    assert.match(second.stdout, /Rebuilding stale or invalid existing MP3/);
+    assert.match(second.stdout, /1 exported, 0 skipped, 0 failed/);
+    const third = runExport(root);
+    assert.match(third.stdout, /0 exported, 1 skipped, 0 failed/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('legacy chapter names with multibyte Unicode match the downloader UTF-8 limit', { skip: !hasFfmpeg }, () => {
+  const root = mkRoot();
+  try {
+    const name = 'Überraschung 🌍 '.repeat(14);
+    const dir = createBook(root, [name]);
+    const maxBytes = 120;
+    let safe = '';
+    for (const char of name.trim()) {
+      if (Buffer.byteLength(safe + char, 'utf8') > maxBytes) break;
+      safe += char;
+    }
+    safe = safe.replace(/[. ]+$/g, '');
+    makeAudio(dir, safe);
+    const exported = runExport(root);
+    assert.equal(exported.status, 0, exported.stderr);
+    assert.match(exported.stdout, /1 exported, 0 skipped, 0 failed/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
