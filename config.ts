@@ -1,4 +1,5 @@
 import * as dotenv from 'dotenv';
+import { existsSync } from 'node:fs';
 
 dotenv.config({ path: '.env' }); // loads env vars from file - will not set vars that are already set, i.e., can overwrite values from file by prefixing, e.g., VAR=VAL node ...
 
@@ -13,6 +14,8 @@ export const cfg = {
   height: Number(process.env.HEIGHT) || 1280, // height of the opened browser
   timeout: (Number(process.env.TIMEOUT) || 30) * 1000, // default timeout for playwright is 30s
   browserDir: process.env.BROWSER_DIR || 'browser', // for multiple accounts or testing
+  // Prefer installed Chrome on macOS; upstream's pinned 2024 Chromium build may no longer download.
+  browserChannel: process.env.BROWSER_CHANNEL || (process.platform === 'darwin' && existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') ? 'chrome' : undefined),
   update: process.env.UPDATE != '0', // set to 0 to disable updating library
   checkall: process.env.CHECKALL == '1', // set to 1 to check all books in the library list instead of stopping at the first book already found in db.json
   download: process.env.DOWNLOAD != '0', // set to 0 to disable downloading books

@@ -18,6 +18,7 @@ import { chromium } from 'playwright-chromium';
 
 export const context = await chromium.launchPersistentContext(cfg.browserDir, {
     headless: cfg.headless,
+    channel: cfg.browserChannel,
     userAgent: fingerprint.navigator.userAgent,
     viewport: {
         width: fingerprint.screen.width,
