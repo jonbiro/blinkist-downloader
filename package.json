@@ -12,7 +12,9 @@
   "bin": "index.ts",
   "type": "module",
   "scripts": {
-    "start": "tsx ./index.ts"
+    "start": "tsx ./index.ts",
+    "export:mp3": "node ./scripts/export-mp3.mjs",
+    "test:mp3": "node --test ./test/export-mp3.test.mjs"
   },
   "dependencies": {
     "chalk": "^5.3.0",

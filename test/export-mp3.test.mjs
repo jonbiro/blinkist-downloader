@@ -1,0 +1,75 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const script = fileURLToPath(new URL('../scripts/export-mp3.mjs', import.meta.url));
+const hasFfmpeg = spawnSync('ffmpeg', ['-version']).status === 0;
+const mkRoot = () => fs.mkdtempSync(path.join(os.tmpdir(), 'blinkist-export-test-'));
+
+function createBook(root, chapters = ['Introduction', "Key idea '1'"]) {
+  const dir = path.join(root, 'books', 'saved', 'test-title-en');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'book.json'), JSON.stringify({
+    id: 'test-title-en', title: 'Test / Title', author: "O'Neil", chapters: chapters.map(name => ({ name, audio: 'https://example.invalid/media.m4a' })),
+  }));
+  return dir;
+}
+function makeAudio(dir, name, frequency = 400) {
+  const file = path.join(dir, name + '.m4a');
+  const p = spawnSync('ffmpeg', ['-nostdin', '-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=0.6`, '-c:a', 'aac', file], { encoding: 'utf8' });
+  assert.equal(p.status, 0, p.stderr);
+}
+const runExport = (root, args = []) => spawnSync(process.execPath, [script, ...args], {
+  cwd: root, env: { ...process.env, BOOKS_DIR: path.join(root, 'books') }, encoding: 'utf8',
+});
+
+test('exports chapters in order as one playable MP3 and preserves metadata', { skip: !hasFfmpeg }, () => {
+  const root = mkRoot();
+  try {
+    const dir = createBook(root);
+    makeAudio(dir, 'Introduction', 400);
+    makeAudio(dir, "Key idea '1'", 800);
+    const result = runExport(root);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /1 exported, 0 skipped, 0 failed/);
+    const out = path.join(root, 'books', 'mp3');
+    const files = fs.readdirSync(out).filter(file => file.endsWith('.mp3'));
+    assert.equal(files.length, 1);
+    const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration:format_tags=title,artist', '-of', 'json', path.join(out, files[0])], { encoding: 'utf8' });
+    assert.equal(probe.status, 0, probe.stderr);
+    const meta = JSON.parse(probe.stdout).format;
+    assert.ok(parseFloat(meta.duration) >= 1.0, meta.duration);
+    assert.equal(meta.tags.title, 'Test / Title');
+    assert.equal(meta.tags.artist, "O'Neil");
+    const rerun = runExport(root);
+    assert.match(rerun.stdout, /0 exported, 1 skipped, 0 failed/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('incomplete books are skipped instead of exported as incomplete MP3s', { skip: !hasFfmpeg }, () => {
+  const root = mkRoot();
+  try {
+    const dir = createBook(root);
+    makeAudio(dir, 'Introduction');
+    const result = runExport(root);
+    assert.equal(result.status, 0);
+    assert.match(result.stdout + result.stderr, /1 of 2 audio chapters missing/);
+    assert.equal(fs.existsSync(path.join(root, 'books', 'mp3')), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('dry run leaves the output directory untouched', { skip: !hasFfmpeg }, () => {
+  const root = mkRoot();
+  try {
+    const dir = createBook(root, ['Introduction']);
+    makeAudio(dir, 'Introduction');
+    const result = runExport(root, ['--dry-run']);
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /Would export 1 chapters/);
+    assert.equal(fs.existsSync(path.join(root, 'books', 'mp3')), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

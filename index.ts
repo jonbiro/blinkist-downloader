@@ -4,6 +4,7 @@ import { cfg } from './config.js';
 import { context, page } from './playwright.js';
 import type { BrowserContext, Page } from 'playwright-chromium';
 import fs from 'node:fs';
+import path from 'node:path';
 import chalk from 'chalk';
 
 type library = 'saved' | 'finished';
@@ -33,12 +34,12 @@ const cookieConsent = async (context: BrowserContext) => {
 
 const login = async (page: Page) => {
   await page.goto('https://www.blinkist.com/en/app/library/saved');
-  // redirects if not logged in to https://www.blinkist.com/en/nc/login?last_page_before_login=/en/app/library/saved
-  return Promise.any([page.waitForURL(/.*login.*/).then(() => {
-    console.error('Not logged in! Will wait for 120s for you to log in...');
-    return page.waitForTimeout(120*1000);
-  }), page.locator('h3:has-text("Saved")').waitFor()]);
-}
+  if (page.url().includes('/login') || await page.locator('input[type="password"]').first().isVisible()) {
+    console.log('Please log in using the browser window (up to 2 minutes).');
+    await page.waitForURL(url => url.hostname === 'www.blinkist.com' && url.pathname.includes('/app/'), { timeout: 120000 });
+    await page.goto('https://www.blinkist.com/en/app/library/saved');
+  }
+};
 
 const updateLibrary = async (page: Page, list: library = 'saved') => {
   const dbList = db.data[list]; // sorted by date added ascending
@@ -50,28 +51,32 @@ const updateLibrary = async (page: Page, list: library = 'saved') => {
   console.log('Updating library:', url);
   console.log(list, 'books in db.json:', dbList.length);
 
-  const listItems = page.locator(`div:has-text("${list}") p`);
   const nextBtn = page.locator('button:has-text("Next"):not([disabled])');
   pages: do { // go through pages
-    const items = await listItems.innerText();
-    console.log('Current page:', items);
-    const books = await page.locator('a[data-test-id="book-card"]').all();
+    // Ignore disabled/removed books and non-book cards (e.g. episodes).
+    const cards = page.locator('a[data-test-id="book-card"]:not(.pointer-events-none)');
+    await cards.first().waitFor({ timeout: 10000 }).catch(() => {});
+    const oldPage = await cards.evaluateAll(els => els.map(el => el.getAttribute('href')).join('|'));
+    const books = await cards.all();
+    if (!books.length) {
+      console.warn(`No downloadable book cards found in ${list}. If your library is not empty, Blinkist may have changed its layout.`);
+      break;
+    }
     for (const book of books) {
       const slug = await book.getAttribute('href');
-      if (!slug) throw new Error('Book has no href attribute!');
+      if (!slug || !slug.includes('/app/books/')) continue;
       const id = slug.split('/').pop() ?? slug;
-      const url = 'https://www.blinkist.com' + slug;
-      const title = await book.getAttribute('aria-label');
-      if (!title) throw new Error('Book has no title / aria-label attribute!');
-      const img = await book.locator('img').getAttribute('src');
-      if (!img) throw new Error('Book has no img src attribute!');
-      const author = await book.locator('[data-test-id="subtitle"]').innerText();
-      const description = await book.locator('[data-test-id="description"]').innerText();
-      // const details = await book.locator('div:below([data-test-id="description"])').innerText();
-      let meta = (await book.locator('div.text-mid-grey.text-caption.mt-2').last().innerText()).split('\n');
-      const duration = parseFloat(meta[0].replace(' min', ''));
-      const rating = parseFloat(meta[1]);
-      const item: book = { id, title, author, description, duration, rating, url, img };
+      const url = new URL(slug, 'https://www.blinkist.com').toString();
+      const title = await book.getAttribute('aria-label') ||
+        await book.locator('[data-test-id="title"]').textContent({ timeout: 500 }).catch(() => null);
+      if (!title) { console.warn('Skipping card without a title:', slug); continue; }
+      const img = await book.locator('img').getAttribute('src', { timeout: 500 }).catch(() => null) ?? '';
+      const author = await book.locator('[data-test-id="subtitle"]').innerText({ timeout: 1000 }).catch(() => '');
+      const description = await book.locator('[data-test-id="description"]').innerText({ timeout: 1000 }).catch(() => '');
+      const meta = (await book.locator('div.text-mid-grey.text-caption.mt-2').last().innerText({ timeout: 500 }).catch(() => '')).split('\n');
+      const duration = parseFloat(meta[0] ?? '') || 0;
+      const rating = parseFloat(meta[1] ?? '') || 0;
+      const item: book = { id, title: title.trim(), author, description, duration, rating, url, img };
       if (dbList.find(i => i.id === id)) {
         if (!cfg.checkall) {
           console.log('Stopping at book already found in db.json:', item);
@@ -89,13 +94,16 @@ const updateLibrary = async (page: Page, list: library = 'saved') => {
         newBooks.push(item);
       }
     }
-    // await page.pause();
-    if (await nextBtn.count()) { // while next button is not disabled; can't check this in do-while condition since it would already be false after click()
-      await nextBtn.click(); // click next page button
-      // wait until items on page have been updated
-      while (items === await listItems.innerText()) {
-        // console.log('Waiting for 500ms...');
-        await page.waitForTimeout(500);
+    if (await nextBtn.count()) {
+      await nextBtn.click();
+      try {
+        await page.waitForFunction(previous =>
+          [...document.querySelectorAll('a[data-test-id="book-card"]:not(.pointer-events-none)')]
+            .map(el => el.getAttribute('href')).join('|') !== previous,
+          oldPage, { timeout: 15000 });
+      } catch {
+        console.warn('Library pagination did not change; stopping to avoid an infinite loop.');
+        break;
       }
     } else break;
   } while (true);
@@ -106,7 +114,43 @@ const updateLibrary = async (page: Page, list: library = 'saved') => {
   console.log();
 };
 
-const downloadFile = (url: string, path: string) => fetch(url).then(res => res.arrayBuffer()).then(bytes => fs.writeFileSync(path, Buffer.from(bytes)));
+// Preserve the old per-chapter filenames, while blocking path separators and invalid names.
+const safeChapterName = (name: string) => name.replace(/[\\/\x00-\x1f:*?"<>|]/g, '_').slice(0, 140).trim() || 'Chapter';
+const chapterPath = (bookDir: string, name: string) => path.join(bookDir, safeChapterName(name) + '.m4a');
+const validFile = (file: string) => fs.existsSync(file) && fs.statSync(file).size > 128;
+
+const isComplete = (bookJson: string, bookDir: string) => {
+  if (!fs.existsSync(bookJson)) return false;
+  try {
+    const saved = JSON.parse(fs.readFileSync(bookJson, 'utf8'));
+    if (!cfg.audio) return true;
+    const audioChapters = (saved.chapters ?? []).filter((c: { audio?: string }) => c.audio);
+    return audioChapters.length > 0 && audioChapters.every((c: { name: string }) => validFile(chapterPath(bookDir, c.name)));
+  } catch { return false; }
+};
+
+const downloadFile = async (url: string, file: string) => {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const tmp = file + '.part';
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status} (${res.statusText})`);
+      const mime = (res.headers.get('content-type') ?? '').toLowerCase();
+      if (mime.startsWith('text/') || mime.includes('application/json'))
+        throw new Error(`Unexpected response type ${mime}; not an audio/image file`);
+      const bytes = Buffer.from(await res.arrayBuffer());
+      if (bytes.length <= 128) throw new Error('Empty or suspiciously short download');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(tmp, bytes);
+      fs.renameSync(tmp, file);
+      return;
+    } catch (error) {
+      fs.rmSync(tmp, { force: true });
+      if (attempt === 3) throw error;
+      await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+    }
+  }
+};
 
 const downloadBooks = async (page: Page, list: library = 'saved') => {
   const dbList = db.data[list]; // sorted by date added ascending
@@ -118,46 +162,37 @@ const downloadBooks = async (page: Page, list: library = 'saved') => {
     i++;
     const bookDir = `books/${list}/${book.id}/`;
     const bookJson = bookDir + 'book.json';
-    const existsDir = fs.existsSync(bookDir);
-    const existsJson = existsDir && fs.existsSync(bookJson);
-    const existsAudio = existsDir && fs.existsSync(bookDir + 'Summary.m4a');
-    console.log(`Book ${i}:`, book.id,
-                existsDir ?
-                  (existsJson ?
-                    (existsAudio ? chalk.green('exists') : chalk.yellow('audio missing'))
-                  : chalk.red('missing'))
-                : chalk.yellow('download'));
-    if (existsDir) continue;
+    const complete = isComplete(bookJson, bookDir);
+    console.log(`Book ${i}:`, book.id, complete ? chalk.green('complete') : chalk.yellow('needs download/resume'));
+    if (complete) continue;
     console.log(`Downloading book (${dbList.length - i} left):`, book.url);
-    const gql = page.waitForResponse(r => r.request().method() == 'POST' && r.url() == 'https://gql-gateway.blinkist.com/graphql');
-    await page.goto('https://www.blinkist.com/en/app/books/' + book.id);
-    const contentState = (await (await gql).json()).data.user.contentStateByContentTypeAndId;
-    const detailsBox = page.locator('div:has(h4)').last();
     try {
-      await detailsBox.waitFor({ timeout: 15000 });
-    } catch (error) {
-      // e.g. https://www.blinkist.com/en/app/books/bulletproof-diet-en
-      // redirected in JS to https://www.blinkist.com/en/app/for-you?missing-title=bulletproof-diet-en
-      console.error(chalk.red('Missing book:'), book.id);
-      console.error('Error:', error);
-      console.log();
-      fs.mkdirSync(bookDir, { recursive: true });
-      continue;
-    }
-    const detailDivs = await detailsBox.locator('div').all();
-    const categories = await detailDivs[1].locator('a').all().then(a => Promise.all(a.map(a => a.innerText())));
-    const descriptionLong = await detailDivs[2].innerHTML();
-    const authorDetails = await detailDivs[3].innerHTML();
-    const ratings = await page.locator('span:has-text(" ratings)")').innerText({ timeout: 200 }).catch(() => undefined); // e.g. 3.9 (89 ratings); may not exist
-    const durationDetail = await page.locator('span:has-text(" mins")').innerText(); // e.g. 15 mins
-    const details = { ...book, ratings, durationDetail, categories, descriptionLong, authorDetails, contentState };
-    console.log('Details:', details);
+      // Reading progress is optional. A change to the GraphQL endpoint must not prevent downloads.
+      const gql = page.waitForResponse(r => r.request().method() === 'POST' &&
+        r.url().includes('gql-gateway.blinkist.com/graphql'), { timeout: 2500 }).catch(() => undefined);
+      await page.goto(book.url);
+      const gqlResponse = await gql;
+      const gqlData = await gqlResponse?.json().catch(() => undefined);
+      const contentState = gqlData?.data?.user?.contentStateByContentTypeAndId;
+      if (page.url().includes('missing-title=')) {
+        console.warn('Book is no longer available:', book.id);
+        continue;
+      }
+      // The old site used positional nested divs. They are optional metadata, not prerequisites for audio.
+      const detailsBox = page.locator('div:has(h4)').last();
+      const detailDivs = await detailsBox.locator('div').all();
+      const categories = detailDivs[1] ? await detailDivs[1].locator('a').all()
+        .then(links => Promise.all(links.map(link => link.innerText().catch(() => '')))) : [];
+      const descriptionLong = detailDivs[2] ? await detailDivs[2].innerHTML().catch(() => '') : '';
+      const authorDetails = detailDivs[3] ? await detailDivs[3].innerHTML().catch(() => '') : '';
+      const ratings = await page.locator('span:has-text(" ratings)")').first().innerText({ timeout: 500 }).catch(() => undefined);
+      const durationDetail = await page.locator('span:has-text(" mins")').first().innerText({ timeout: 500 }).catch(() => undefined);
+      const details = { ...book, ratings, durationDetail, categories, descriptionLong, authorDetails, contentState };
 
     const chapters = [];
     let orgChapter = undefined;
     const resp = await page.goto('https://www.blinkist.com/en/nc/reader/' + book.id);
-    if (resp && resp.status() !== 404) {
-      await page.locator('.reader-content__text').waitFor(); // wait for content to load
+    if (resp?.ok() && await page.locator('.reader-content__text').first().waitFor({ timeout: 10000 }).then(() => true).catch(() => false)) {
       // chapter number (Introduction, Key idea 1...), but last chapter (summary) has no name, so we time out and return Summary
       const chapterNumber = () => page.locator('[data-test-id="currentChapterNumber"]').innerText({ timeout: 200 }).catch(() => 'Summary');
       orgChapter = await chapterNumber();
@@ -165,48 +200,61 @@ const downloadBooks = async (page: Page, list: library = 'saved') => {
       const reset = async () => {
         const chapter = await chapterNumber();
         if (chapter === 'Introduction') return;
-        await page.locator('[data-test-id="keyIdeas"]').click(); // open Key ideas chapter menu
-        await page.locator('[data-test-id="chapterLink"]').first().click(); // go to first chapter (Introduction)
-        while (chapter === await chapterNumber()) {
-          // console.log('Waiting for 200ms...');
-          await page.waitForTimeout(200);
-        }
+        const menu = page.locator('[data-test-id="keyIdeas"]');
+        const links = page.locator('[data-test-id="chapterLink"]');
+        if (!(await menu.count())) return; // changed reader UI: keep available chapters
+        await menu.click();
+        if (!(await links.count())) return;
+        await links.first().click();
+        await page.waitForFunction(previous =>
+          document.querySelector('[data-test-id="currentChapterNumber"]')?.textContent?.trim() !== previous,
+          chapter, { timeout: 5000 }).catch(() => {});
       }
-      await reset();
-      do {
+      await reset().catch(err => console.warn('Could not reset reader:', err));
+      const seen = new Set<string>();
+      for (let step = 0; step < 100; step++) {
         const name = await chapterNumber();
-        const title = await page.locator('h2').first().innerText();
-        console.log(name, title);
-        const text = await page.locator('.reader-content__text').first().innerHTML();
-        const audio = await page.locator('[data-test-id="readerAudio"]').getAttribute('audio-url');
-        const chapter = { name, title, text, audio };
-        chapters.push(chapter);
+        const title = await page.locator('h2').first().innerText({ timeout: 3000 }).catch(() => name);
+        const content = page.locator('.reader-content__text').first();
+        const text = await content.innerHTML();
+        const key = name + ':' + title + ':' + text.slice(0, 100);
+        if (seen.has(key)) break;
+        seen.add(key);
+        const audio = await page.locator('[data-test-id="readerAudio"]').first().getAttribute('audio-url', { timeout: 500 }).catch(() => null)
+          ?? await page.locator('audio').first().getAttribute('src', { timeout: 500 }).catch(() => null)
+          ?? await page.locator('audio source').first().getAttribute('src', { timeout: 500 }).catch(() => null);
+        chapters.push({ name, title, text, audio });
+        console.log(name, title, audio ? 'audio available' : 'audio URL not found');
         const nextBtn = page.locator('[data-test-id="nextChapter"]');
-        if (await nextBtn.isVisible()) {
-          await nextBtn.click();
-          while (title === await page.locator('h2').first().innerText()) {
-            // console.log('Waiting for 200ms...');
-            await page.waitForTimeout(200);
-          }
-        } else break;
-      } while (true);
-      await reset();
+        if (!(await nextBtn.isVisible())) break;
+        await nextBtn.click();
+        await page.waitForFunction(previous =>
+          document.querySelector('.reader-content__text')?.innerHTML !== previous,
+          text, { timeout: 5000 }).catch(() => {});
+      }
+      await reset().catch(() => {});
     } else {
-      console.error('Book not found:', book.id);
+      console.warn('Reader UI unavailable/changed:', book.id, page.url());
     }
 
-    // write data at the end
     fs.mkdirSync(bookDir, { recursive: true });
     fs.writeFileSync(bookJson, JSON.stringify({ ...details, downloadDate: new Date(), orgChapter, chapters }, null, 2));
-    await downloadFile(book.img, bookDir + 'cover.png');
+    if (book.img && !validFile(bookDir + 'cover.png'))
+      await downloadFile(book.img, bookDir + 'cover.png').catch(err => console.warn('Cover failed:', err));
     if (cfg.audio) {
       console.log('Downloading audio files:', chapters.filter(c => c.audio).length);
       for (const { name, audio } of chapters) {
-        if (audio) await downloadFile(audio, bookDir + name + '.m4a');
+        if (!audio || validFile(chapterPath(bookDir, name))) continue;
+        await downloadFile(audio, chapterPath(bookDir, name)).catch(err =>
+          console.warn(`Audio failed for ${book.id} / ${name}:`, err));
       }
+      if (!chapters.some(c => c.audio))
+        console.warn(`No audio URLs found for ${book.id}. Reader selectors may need a live update.`);
     }
     console.log();
-    // process.exit(0);
+    } catch (error) {
+      console.error(chalk.red(`Failed to process ${book.id}; continuing:`), error);
+    }
   }
   console.log();
 };

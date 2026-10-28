@@ -99,3 +99,17 @@ TypeError: expected str, bytes or os.PathLike object, not NoneType
 [23:24:59] CRITICAL Uncaught Exception. Exiting...
 ```
 </details>
+
+## MP3 player export (2026 repair)
+
+This fork includes defensive handling for changed Blinkist pages, resume support for incomplete downloads, and offline MP3 conversion of existing local M4A chapter files.
+
+1. Install Node.js and FFmpeg (`brew install ffmpeg` on macOS), then `npm install`.
+2. Install the compatible Playwright browser if needed with `npx playwright install chromium`.
+3. Run `npm start` and sign in to Blinkist using the visible browser window.
+4. Run `npm run export:mp3` to combine downloaded chapters into a single MP3 per book under `books/mp3/`.
+5. Copy your MP3 files to your music player. Run `npm run test:mp3` for exporter checks.
+
+You can preview without converting with `npm run export:mp3 -- --dry-run`. See [MP3_EXPORT.md](./MP3_EXPORT.md) for details, limitations, and troubleshooting.
+
+**Status:** MP3 export has automated local tests. The end-to-end Blinkist web reader and audio URLs have **not been validated** against a current logged-in Blinkist session; Blinkist may have changed its reader or may restrict exporting under its terms.
