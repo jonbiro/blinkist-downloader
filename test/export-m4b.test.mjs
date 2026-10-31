@@ -26,11 +26,11 @@ function createBook(home, chapters = ['Introduction', 'Key idea = 1; #Focus', 'S
   return dir;
 }
 
-function createAudio(dir, name, frequency = 440) {
+function createAudio(dir, name, frequency = 440, sampleRate = 44100) {
   const result = spawnSync('ffmpeg', [
     '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
     '-f', 'lavfi', '-i', 'sine=frequency=' + frequency + ':duration=0.7',
-    '-c:a', 'aac', path.join(dir, name + '.m4a'),
+    '-ar', String(sampleRate), '-c:a', 'aac', path.join(dir, name + '.m4a'),
   ], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
 }
@@ -187,5 +187,59 @@ test('exports legacy filename-based chapters in listening order', { skip: !hasTo
     const data = probe(outputFile(home, 'm4b'));
     assert.deepEqual(data.chapters.map(chapter => chapter.tags.title),
       ['Introduction', 'Key idea 1', 'Key idea 2', 'Summary']);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('duplicate Saved/Finished book ID is exported once without overwriting the first copy', { skip: !hasTools }, () => {
+  const home = root();
+  try {
+    const saved = createBook(home, ['Introduction', 'Summary']);
+    createAudio(saved, 'Introduction', 400);
+    createAudio(saved, 'Summary', 600);
+
+    const finished = path.join(home, 'books', 'finished', 'focus-en');
+    fs.mkdirSync(finished, { recursive: true });
+    const manifest = JSON.parse(fs.readFileSync(path.join(saved, 'book.json'), 'utf8'));
+    manifest.chapters.splice(1, 0, { name: 'Key idea 1', audio: 'https://example.invalid/audio.m4a' });
+    fs.writeFileSync(path.join(finished, 'book.json'), JSON.stringify(manifest));
+    createAudio(finished, 'Introduction', 800);
+    createAudio(finished, 'Key idea 1', 900);
+    createAudio(finished, 'Summary', 950);
+
+    const result = run(home, 'm4b');
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /1 exported, 1 skipped, 0 failed/);
+    assert.equal(probe(outputFile(home, 'm4b')).chapters.length, 3);
+    const again = run(home, 'm4b');
+    assert.match(again.stdout, /0 exported, 2 skipped, 0 failed/);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('mixed source sample rates preserve correct audiobook duration and chapter positions', { skip: !hasTools }, () => {
+  const home = root();
+  try {
+    const dir = createBook(home, ['Introduction', 'Summary']);
+    createAudio(dir, 'Introduction', 440, 22050);
+    createAudio(dir, 'Summary', 660, 48000);
+    const result = run(home, 'm4b');
+    assert.equal(result.status, 0, result.stderr);
+    const info = probe(outputFile(home, 'm4b'));
+    assert.ok(Math.abs(Number(info.format.duration) - 1.4) < 0.2,
+      'Mixed sample rates produced incorrect total duration: ' + info.format.duration);
+    assert.equal(info.chapters.length, 2);
+    assert.ok(Math.abs(Number(info.chapters[1].start_time) - 0.7) < 0.12);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('rejects old false-positive reader completion that started in the middle', { skip: !hasTools }, () => {
+  const home = root();
+  try {
+    const dir = createBook(home, ['Key idea 4', 'Summary']);
+    createAudio(dir, 'Key idea 4');
+    createAudio(dir, 'Summary', 650);
+    const result = run(home);
+    assert.equal(result.status, 0);
+    assert.match(result.stderr, /lacks complete Introduction-to-Summary coverage/);
+    assert.equal(fs.existsSync(path.join(home, 'books', 'm4b')), false);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

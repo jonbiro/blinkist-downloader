@@ -31,21 +31,26 @@ function addBook(booksDir, list, id, metadata) {
 }
 
 const audioChapter = { name: 'Introduction', audio: 'https://audio.example.test/secret.m4a' };
+const summaryChapter = { name: 'Summary', audio: 'https://audio.example.test/summary.m4a' };
+const fakeAudio = Buffer.concat([
+  Buffer.from('00000018667479704d344120','hex'), Buffer.alloc(500,1),
+]);
 
 test('local inventory distinguishes complete, partial, legacy and unreadable downloads', () => {
   const root = makeTemp();
   const booksDir = path.join(root, 'books');
   try {
     const complete = addBook(booksDir, 'saved', 'complete-en',
-      { title: 'PRIVATE TITLE', readerComplete: true, chapters: [audioChapter] });
-    fs.writeFileSync(path.join(complete, 'Introduction.m4a'), Buffer.alloc(512, 1));
+      { title: 'PRIVATE TITLE', readerComplete: true, chapters: [audioChapter, summaryChapter] });
+    fs.writeFileSync(path.join(complete, 'Introduction.m4a'), fakeAudio);
+    fs.writeFileSync(path.join(complete, 'Summary.m4a'), fakeAudio);
 
     addBook(booksDir, 'saved', 'incomplete-en',
       { readerComplete: false, chapters: [audioChapter] });
 
     const legacy = addBook(booksDir, 'finished', 'legacy-en',
       { chapters: [audioChapter] });
-    fs.writeFileSync(path.join(legacy, 'Introduction.m4a'), Buffer.alloc(512, 1));
+    fs.writeFileSync(path.join(legacy, 'Introduction.m4a'), fakeAudio);
 
     addBook(booksDir, 'finished', 'missing-en', undefined);
     addBook(booksDir, 'finished', 'invalid-en', 'not json');
@@ -59,7 +64,7 @@ test('local inventory distinguishes complete, partial, legacy and unreadable dow
     assert.deepEqual(summary, {
       saved: 2, finished: 3, complete: 1, incomplete: 1,
       legacyUnverified: 1, missingMetadata: 1, invalidMetadata: 1,
-      audioFiles: 2, mp3Files: 1, m4bFiles: 1,
+      audioFiles: 3, mp3Files: 1, m4bFiles: 1,
     });
     assert.doesNotMatch(stdout, /PRIVATE|secret\.m4a|complete-en|legacy-en/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

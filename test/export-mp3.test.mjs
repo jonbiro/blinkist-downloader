@@ -93,9 +93,10 @@ test('incomplete reader state never produces a deceptively complete MP3', { skip
 test('missing chapter audio URL or broken media cannot be silently skipped', { skip: !hasFfmpeg }, () => {
   const root = mkRoot();
   try {
-    const dir = createBook(root, ['Introduction', 'Key idea 1']);
+    const dir = createBook(root, ['Introduction', 'Key idea 1', 'Summary']);
     makeAudio(dir, 'Introduction');
     makeAudio(dir, 'Key idea 1');
+    makeAudio(dir, 'Summary');
     const manifestFile = path.join(dir, 'book.json');
     const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
     manifest.readerComplete = true;

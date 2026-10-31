@@ -37,10 +37,10 @@ and has not been verified against a live October 2026 Blinkist session.
 
 Each downloaded book has a `book.json` with the ordered chapter list. Modern manifests also have `readerComplete` and, for each chapter, `fileName`.
 
-- `readerComplete: false` means chapter traversal stopped early. **The MP3 is not produced.**
+- `readerComplete: false` means chapter traversal stopped early. **Neither MP3 nor M4B is produced.** A previous `readerComplete: true` flag is also rejected when its chapters do not run from Introduction through Summary.
 - All chapters must have audio URLs and corresponding locally saved files. Missing chapters cause a skip rather than a partial export.
-- The exporter verifies that each source file actually contains decodable audio (using FFprobe) and validates the combined MP3 duration.
-- Failed transcoding never replaces an existing MP3; output is staged in a temporary file and renamed only after validation.
+- The exporter verifies that each source file contains decodable audio (using FFprobe) and validates final MP3/M4B duration. Chapters with different sample rates, channel counts, or codecs are temporarily normalized to lossless PCM before the final encoding pass; originals are left untouched.
+- Failed transcoding never replaces an existing MP3 or M4B; output is staged and renamed only after validation. If a book appears in both Saved and Finished, the exporter selects one eligible copy, favoring a confirmed complete version with more chapters.
 - Older manifests without `readerComplete` are supported on a best-effort basis. Without a known manifest, legacy M4A files are sorted by their filenames; completeness cannot be guaranteed.
 
 If a book is skipped, read the reason in the output. To retry interrupted downloads, run `MAX_BOOKS=1 npm start` again (or remove the limit after a successful test). The downloader reuses chapters that already exist.

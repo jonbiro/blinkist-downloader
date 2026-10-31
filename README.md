@@ -115,7 +115,7 @@ When the reader changes or audio cannot be located, use `DIAGNOSE=1 MAX_BOOKS=1 
 - `books/m4b/*.m4b`: AAC audiobooks with chapter markers, title/author/album tags, and embedded artwork when available.
 - `browser/`: saved login session, private to your computer.
 
-**Incomplete downloads are never intentionally exported as complete books.** Missing URLs, invalid audio tracks, duplicate filenames, and interrupted reader traversal are reported and skipped. Existing valid chapter files are reused when possible.
+**Incomplete downloads are never intentionally exported as complete books.** A download is marked complete only when extraction starts at Introduction, reaches Summary, and has recognizable audio files for every chapter. A failed retry preserves a more complete previous chapter manifest; old false-positive completion markers and obvious non-audio files are rejected. Existing good chapters are reused when possible.
 
 See [the audio export guide](MP3_EXPORT.md) for MP3/M4B compatibility and chapter metadata details. The `viewer/` directory is the original upstream experimental viewer and is not part of the MP3 workflow.
 

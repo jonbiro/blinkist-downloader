@@ -105,6 +105,10 @@ function orderedTracks({ dir, book }) {
     return { tracks: [], chapterNames: [], reason: 'reader did not reach the final chapter' };
   }
   const chapters = Array.isArray(book.chapters) ? book.chapters : [];
+  if (book.readerComplete === true && (chapters.length < 2 ||
+      chapters[0]?.name !== 'Introduction' || chapters[chapters.length - 1]?.name !== 'Summary')) {
+    return { tracks: [], chapterNames: [], reason: 'saved reader manifest lacks complete Introduction-to-Summary coverage' };
+  }
   if (chapters.length) {
     if (chapters.some(c => !c || !c.audio || !filenameForChapter(c))) {
       return { tracks: [], chapterNames: [], reason: 'missing audio URL/filename in the chapter manifest' };
@@ -149,6 +153,8 @@ function probeMedia(file) {
     return {
       duration,
       codec: audio.codec_name,
+      sampleRate: Number(audio.sample_rate) || 0,
+      channels: Number(audio.channels) || 0,
       tags: info.format?.tags ?? {},
       chapters: info.chapters ?? [],
       hasCover: Boolean(info.streams?.some(stream => stream.disposition?.attached_pic === 1)),
@@ -213,6 +219,35 @@ function writeChapterMetadata(dest, chapterNames, sourceInfos) {
   fs.writeFileSync(dest, metadata);
 }
 
+// FFmpeg's concat demuxer silently assumes identical audio stream layouts.
+// If chapters differ, decode to uniform lossless PCM before the single final
+// MP3/AAC encoding pass. This preserves duration without double lossy encoding.
+function prepareConcatTracks(tracks, sourceInfos, tmpDir) {
+  const first = sourceInfos[0];
+  const compatible = sourceInfos.every(info =>
+    info.codec === first.codec &&
+    info.sampleRate === first.sampleRate &&
+    info.channels === first.channels
+  );
+  if (compatible) return tracks;
+
+  const normalized = [];
+  for (const [index, file] of tracks.entries()) {
+    const dest = path.join(tmpDir, String(index).padStart(3, '0') + '.wav');
+    const result = spawnSync(ffmpeg, [
+      '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+      '-i', file, '-vn', '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2',
+      dest,
+    ], { encoding: 'utf8', timeout: 120000 });
+    if (result.error || result.status !== 0 || !validFile(dest)) {
+      throw new Error('Could not normalize chapter ' + (index + 1) + ': ' +
+        (result.stderr?.trim() || result.error?.message || String(result.status)));
+    }
+    normalized.push(dest);
+  }
+  return normalized;
+}
+
 function transcode(format, dest, details) {
   const { tracks, title, author, chapterNames, cover, sourceInfos, expectedDuration } = details;
   const dir = outputDirs[format];
@@ -222,8 +257,9 @@ function transcode(format, dest, details) {
   const metaFile = path.join(tmpDir, 'chapters.ffmeta');
   const tmpOutput = path.join(dir, '.' + path.basename(dest) + '.' + process.pid + '.part.' + format);
   try {
+    const concatTracks = prepareConcatTracks(tracks, sourceInfos, tmpDir);
     fs.writeFileSync(concatFile, 'ffconcat version 1.0\n' +
-      tracks.map(file => 'file ' + quoteForFfconcat(path.resolve(file)) + '\n').join(''));
+      concatTracks.map(file => 'file ' + quoteForFfconcat(path.resolve(file)) + '\n').join(''));
     const argv = [
       '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
       '-f', 'concat', '-safe', '0', '-i', concatFile,
@@ -277,14 +313,53 @@ function transcode(format, dest, details) {
   }
 }
 
+// Saved and Finished can both contain the same Blinkist book. Choose one
+// usable copy before exporting so a second entry cannot overwrite the first.
+function selectBestCopies(entries) {
+  const groups = new Map();
+  for (const entry of entries) {
+    if (!groups.has(entry.id)) groups.set(entry.id, []);
+    groups.get(entry.id).push(entry);
+  }
+
+  function quality(entry) {
+    const { tracks, reason } = orderedTracks(entry);
+    if (reason || !tracks.length) return [0, 0, 0];
+    const usable = tracks.every(file => validFile(file) && Boolean(probeMedia(file)));
+    return [Number(usable), Number(entry.book.readerComplete === true), tracks.length];
+  }
+
+  const chosen = [];
+  for (const candidates of groups.values()) {
+    let best = candidates[0];
+    if (candidates.length > 1) {
+      let bestScore = quality(best);
+      for (const candidate of candidates.slice(1)) {
+        const candidateScore = quality(candidate);
+        const better = candidateScore.findIndex((score, index) => score !== bestScore[index]);
+        if (better >= 0 && candidateScore[better] > bestScore[better]) {
+          best = candidate;
+          bestScore = candidateScore;
+        }
+      }
+    }
+    chosen.push(best);
+  }
+  return { books: chosen, duplicateCopies: entries.length - chosen.length };
+}
+
 if (!fs.existsSync(booksDir)) {
   console.error('Books folder not found: ' + booksDir);
   process.exit(1);
 }
-const books = listBooks();
+const entries = listBooks();
+const { books, duplicateCopies } = selectBestCopies(entries);
 let exported = 0;
-let skipped = 0;
+let skipped = duplicateCopies * requestedFormats.length;
 let failed = 0;
+if (duplicateCopies) {
+  console.log('Skipped ' + duplicateCopies + ' redundant Saved/Finished book copies.');
+}
 for (const entry of books) {
   const { book, id } = entry;
   const title = typeof book.title === 'string' && book.title ? book.title : id;

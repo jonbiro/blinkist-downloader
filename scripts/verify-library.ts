@@ -2,7 +2,7 @@
 // Local inventory only. Never signs in, downloads, or prints private book data.
 import fs from 'node:fs';
 import path from 'node:path';
-import { isCompleteManifest, validMediaFile } from '../lib/book-files.js';
+import { isCompleteManifest, validAudioFile, validMediaFile } from '../lib/book-files.js';
 
 const booksDir = path.resolve(process.env.BOOKS_DIR || 'books');
 const jsonOutput = process.argv.includes('--json');
@@ -35,7 +35,7 @@ for (const list of ['saved', 'finished'] as const) {
     const bookDir = path.join(directory, folder.name);
     const audioFiles = fs.readdirSync(bookDir)
       .filter(file => file.toLowerCase().endsWith('.m4a') &&
-        validMediaFile(path.join(bookDir, file)));
+        validAudioFile(path.join(bookDir, file)));
     summary.audioFiles += audioFiles.length;
 
     const metadata = path.join(bookDir, 'book.json');

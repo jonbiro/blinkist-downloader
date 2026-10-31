@@ -31,8 +31,11 @@ export const inferChapterLabel = (number: string | null, heading: string | null)
   return /^(?:summary|conclusion)$/i.test(heading?.trim() ?? '') ? 'Summary' : 'Unknown';
 };
 
-export const confirmedReaderEnd = (name: string, visitedChapters: number): boolean =>
-  name === 'Summary' && visitedChapters >= 2;
+// Finishing at Summary is NOT proof of full traversal if reset-to-Introduction failed.
+export const confirmedReaderEnd = (
+  name: string, visitedChapters: number, startedAtIntroduction: boolean,
+): boolean =>
+  name === 'Summary' && visitedChapters >= 2 && startedAtIntroduction;
 
 export const validBookId = (id: string): boolean =>
   /^[a-z0-9][a-z0-9-]{0,160}$/i.test(id);
@@ -46,7 +49,35 @@ export const validMediaFile = (file: string): boolean => {
   }
 };
 
-// Metadata is untrusted local input: never let a filename escape its book folder.
+// A size check alone accepts HTML/JSON error pages as audio. Recognize
+// standard M4A/MP4, MP3/AAC, Ogg, WAV and WebM headers cheaply; FFprobe
+// performs full decoding validation during MP3/M4B export.
+export const validAudioFile = (file: string): boolean => {
+  if (!validMediaFile(file)) return false;
+  let handle: number | undefined;
+  try {
+    handle = fs.openSync(file, 'r');
+    const header = new Uint8Array(16);
+    const bytes = fs.readSync(handle, header, 0, header.length, 0);
+    if (bytes < 12) return false;
+    const ascii = Buffer.from(header);
+    const magic = ascii.toString('ascii', 0, 4);
+    return ascii.toString('ascii', 4, 8) === 'ftyp'
+      || magic === 'OggS'
+      || magic === 'fLaC'
+      || (magic === 'RIFF' && ascii.toString('ascii', 8, 12) === 'WAVE')
+      || (header[0] === 0x1a && header[1] === 0x45 &&
+          header[2] === 0xdf && header[3] === 0xa3)
+      || ascii.toString('ascii', 0, 3) === 'ID3'
+      || (header[0] === 0xff && (header[1] & 0xe0) === 0xe0);
+  } catch {
+    return false;
+  } finally {
+    if (handle !== undefined) fs.closeSync(handle);
+  }
+};
+
+// Metadata is untrusted local input: filenames must never escape a book folder.
 export const audioFileName = (chapter: AudioChapter): string | null => {
   if (typeof chapter.fileName === 'string') {
     const file = chapter.fileName;
@@ -70,13 +101,38 @@ export const selectAudioFileName = (
   const legacy = name + '.m4a';
   const numbered = String(index + 1).padStart(3, '0') + ' - ' + name + '.m4a';
   let chosen = numbered;
-  if (!claimed.has(numbered.toLowerCase()) && validMediaFile(path.join(bookDir, numbered))) {
+  if (!claimed.has(numbered.toLowerCase()) && validAudioFile(path.join(bookDir, numbered))) {
     chosen = numbered;
-  } else if (!claimed.has(legacy.toLowerCase()) && validMediaFile(path.join(bookDir, legacy))) {
+  } else if (!claimed.has(legacy.toLowerCase()) && validAudioFile(path.join(bookDir, legacy))) {
     chosen = legacy;
   }
   claimed.add(chosen.toLowerCase());
   return chosen;
+};
+
+// A failed re-scan must not replace a useful chapter listing with an empty
+// result or a shorter suffix. Saved audio files remain available for retry.
+export const selectSavedManifest = <T extends BookManifest>(
+  previous: unknown, incoming: T,
+): BookManifest => {
+  if (!previous || typeof previous !== 'object') return incoming;
+  const old = previous as BookManifest;
+  const earlier = Array.isArray(old.chapters) ? old.chapters : [];
+  const latest = Array.isArray(incoming.chapters) ? incoming.chapters : [];
+  if (!earlier.length) return incoming;
+  if (!latest.length) return old;
+
+  const oldFull = old.readerComplete === true && confirmedReaderEnd(
+    earlier[earlier.length - 1]?.name, earlier.length, earlier[0]?.name === 'Introduction',
+  );
+  const newFull = incoming.readerComplete === true && confirmedReaderEnd(
+    latest[latest.length - 1]?.name, latest.length, latest[0]?.name === 'Introduction',
+  );
+  if (newFull) return incoming;
+  if (oldFull) return old;
+  if (earlier[0]?.name === 'Introduction' && latest[0]?.name !== 'Introduction') return old;
+  if (earlier.length > latest.length) return old;
+  return incoming;
 };
 
 // A reader that stopped halfway through must never be treated as fully downloaded.
@@ -87,6 +143,13 @@ export const isCompleteManifest = (
   const book = data as BookManifest;
   if (book.readerComplete === false) return false;
   if (!Array.isArray(book.chapters) || book.chapters.length === 0) return false;
+  // Older versions sometimes marked a mid-book suffix as complete. Audit
+  // previously saved manifests as well, not just new traversals.
+  if (book.readerComplete === true && !confirmedReaderEnd(
+    book.chapters[book.chapters.length - 1]?.name,
+    book.chapters.length,
+    book.chapters[0]?.name === 'Introduction',
+  )) return false;
   if (!audioRequired) return true;
 
   const paths = book.chapters.map(chapter =>
@@ -94,6 +157,6 @@ export const isCompleteManifest = (
       ? audioFilePath(bookDir, chapter)
       : null,
   );
-  return paths.every((file): file is string => Boolean(file) && validMediaFile(file!))
+  return paths.every((file): file is string => Boolean(file) && validAudioFile(file!))
     && new Set(paths.map(file => file?.toLowerCase())).size === paths.length;
 };

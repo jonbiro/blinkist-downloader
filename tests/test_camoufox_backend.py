@@ -14,8 +14,11 @@ from unittest.mock import patch
 from camoufox_backend.core import (
     Downloader, Settings, choose_audio, choose_file, clean_book_url,
     complete_book, download_file, https_media, infer_chapter_label,
-    is_audio_response, read_json, safe_name,
+    is_audio_response, read_json, safe_name, reached_complete_summary, valid_audio_file, select_saved_manifest,
 )
+
+
+FAKE_AUDIO = bytes.fromhex('00000018667479704d344120') + b'A' * 500
 
 
 def record(ident):
@@ -115,7 +118,7 @@ class FakePage:
 
 
 class FakeHttp(io.BytesIO):
-    def __init__(self, data=b'\x00' * 512, content_type='audio/mp4', length=None):
+    def __init__(self, data=FAKE_AUDIO, content_type='audio/mp4', length=None):
         super().__init__(data)
         self.headers = {'Content-Type': content_type, 'Content-Length': str(length if length is not None else len(data))}
 
@@ -128,7 +131,7 @@ class Helpers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             filename = choose_file('Summary', 0, Path(tmp), set())
             self.assertEqual(filename, '001 - Summary.m4a')
-            Path(tmp, 'Summary.m4a').write_bytes(b'A' * 400)
+            Path(tmp, 'Summary.m4a').write_bytes(FAKE_AUDIO)
             self.assertEqual(choose_file('Summary', 0, Path(tmp), set()), 'Summary.m4a')
 
     def test_books_are_complete_only_with_all_media_and_no_reused_files(self):
@@ -140,7 +143,7 @@ class Helpers(unittest.TestCase):
             ]}
             self.assertFalse(complete_book(manifest, directory, True))
             for c in manifest['chapters']:
-                (directory / c['fileName']).write_bytes(b'A' * 512)
+                (directory / c['fileName']).write_bytes(FAKE_AUDIO)
             self.assertTrue(complete_book(manifest, directory, True))
             manifest['chapters'][1]['fileName'] = manifest['chapters'][0]['fileName']
             self.assertFalse(complete_book(manifest, directory, True))
@@ -155,6 +158,38 @@ class Helpers(unittest.TestCase):
             self.assertIsNone(clean_book_url(url), url)
         self.assertIsNone(https_media('blob:https://www.blinkist.com/123'))
         self.assertIsNone(https_media('file:///etc/passwd'))
+
+    def test_retry_preserves_prior_complete_or_longer_chapter_inventory(self):
+        previous = {
+            'readerComplete': True,
+            'chapters': [
+                {'name': 'Introduction', 'audio': 'old1'},
+                {'name': 'Key idea 1', 'audio': 'old2'},
+                {'name': 'Summary', 'audio': 'old3'},
+            ],
+        }
+        empty = {'readerComplete': False, 'chapters': []}
+        suffix = {'readerComplete': False, 'chapters': [
+            {'name': 'Key idea 1'}, {'name': 'Summary'},
+        ]}
+        self.assertIs(select_saved_manifest(previous, empty), previous)
+        self.assertIs(select_saved_manifest(previous, suffix), previous)
+        repaired = {'readerComplete': True, 'chapters': list(previous['chapters'])}
+        self.assertIs(select_saved_manifest(previous, repaired), repaired)
+
+    def test_reader_must_start_at_introduction_to_be_complete(self):
+        self.assertFalse(reached_complete_summary([
+            {"name": "Key idea 4"}, {"name": "Summary"},
+        ]))
+        self.assertFalse(reached_complete_summary([
+            {"name": "Unknown"}, {"name": "Summary"},
+        ]))
+        self.assertFalse(reached_complete_summary([
+            {"name": "Introduction"}, {"name": "Key idea 1"},
+        ]))
+        self.assertTrue(reached_complete_summary([
+            {"name": "Introduction"}, {"name": "Summary"},
+        ]))
 
     def test_network_audio_matching_is_conservative(self):
         a = 'https://media.example.com/a.m4a?Signature=secret'
@@ -185,6 +220,23 @@ class Helpers(unittest.TestCase):
             def too_big(url, timeout): return FakeHttp(b'0' * 512, length=101 * 1024 * 1024)
             with self.assertRaises(ValueError):
                 download_file('https://media.example.com/signed.m4a', path, too_big)
+
+    def test_corrupt_audio_and_misclassified_saved_manifests_are_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            chapters = [
+                {'name': 'Introduction', 'audio': 'https://example.test/a.m4a'},
+                {'name': 'Summary', 'audio': 'https://example.test/b.m4a'},
+            ]
+            book = {'readerComplete': True, 'chapters': chapters}
+            (directory / 'Introduction.m4a').write_bytes(b'<html>' + b'A' * 512)
+            (directory / 'Summary.m4a').write_bytes(FAKE_AUDIO)
+            self.assertFalse(valid_audio_file(directory / 'Introduction.m4a'))
+            self.assertFalse(complete_book(book, directory, True))
+            (directory / 'Introduction.m4a').write_bytes(FAKE_AUDIO)
+            self.assertTrue(complete_book(book, directory, True))
+            book['chapters'][0]['name'] = 'Key idea 3'
+            self.assertFalse(complete_book(book, directory, False))
 
     def test_scanner_checkpoints_each_page_and_skips_duplicates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -228,6 +280,20 @@ class Helpers(unittest.TestCase):
             worker.download_book = lambda list_name, book: attempted.append(book['id']) or True
             self.assertEqual(worker.run(), 0)
             self.assertEqual(attempted, ['first-en'])
+
+    def test_corrupt_previous_book_json_is_retried_instead_of_blocking_all_downloads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings(books_dir=Path(tmp) / 'books', update=False, max_books=1)
+            worker = Downloader(settings, FakePage([]))
+            worker.db['saved'] = [record('corrupt-en')]
+            folder = settings.books_dir / 'saved' / 'corrupt-en'
+            folder.mkdir(parents=True)
+            (folder / 'book.json').write_text('{invalid', encoding='utf-8')
+            worker.login = lambda: None
+            attempted = []
+            worker.download_book = lambda list_name, book: attempted.append(book['id']) or True
+            self.assertEqual(worker.run(), 0)
+            self.assertEqual(attempted, ['corrupt-en'])
 
     def test_camoufox_starts_with_its_own_persistent_profile(self):
         from camoufox_backend import __main__ as cli

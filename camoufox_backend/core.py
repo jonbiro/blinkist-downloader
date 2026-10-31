@@ -89,6 +89,31 @@ def valid_file(path: Path) -> bool:
         return False
 
 
+def valid_audio_file(path: Path) -> bool:
+    """Reject HTML, JSON and random bytes masquerading as saved M4A audio.
+
+    Header validation is deliberately inexpensive. FFprobe checks actual
+    decodability when generating MP3/M4B exports.
+    """
+    if not valid_file(path):
+        return False
+    try:
+        with path.open("rb") as stream:
+            header = stream.read(16)
+    except OSError:
+        return False
+    if len(header) < 12:
+        return False
+    return (
+        header[4:8] == b"ftyp"
+        or header[:4] in {b"OggS", b"fLaC"}
+        or (header[:4] == b"RIFF" and header[8:12] == b"WAVE")
+        or header[:4] == bytes([0x1a, 0x45, 0xdf, 0xa3])
+        or header[:3] == b"ID3"
+        or (header[0] == 0xff and (header[1] & 0xe0) == 0xe0)
+    )
+
+
 def chapter_file(chapter: dict[str, Any]) -> str | None:
     if "fileName" in chapter:
         file = chapter["fileName"]
@@ -105,6 +130,10 @@ def complete_book(book: Any, directory: Path, audio_required: bool) -> bool:
     chapters = book.get("chapters")
     if not isinstance(chapters, list) or not chapters:
         return False
+    # Recheck saved manifests from older versions that incorrectly considered
+    # a mid-book suffix complete because it ended with Summary.
+    if book.get('readerComplete') is True and not reached_complete_summary(chapters):
+        return False
     if not audio_required:
         return True
     used: set[str] = set()
@@ -112,7 +141,7 @@ def complete_book(book: Any, directory: Path, audio_required: bool) -> bool:
         if not isinstance(chapter, dict) or not isinstance(chapter.get("audio"), str) or not chapter["audio"]:
             return False
         filename = chapter_file(chapter)
-        if not filename or filename.lower() in used or not valid_file(directory / filename):
+        if not filename or filename.lower() in used or not valid_audio_file(directory / filename):
             return False
         used.add(filename.lower())
     return True
@@ -122,9 +151,9 @@ def choose_file(name: str, index: int, directory: Path, used: set[str]) -> str:
     clean = safe_name(name)
     legacy = clean + ".m4a"
     numbered = f"{index + 1:03d} - {clean}.m4a"
-    if numbered.lower() not in used and valid_file(directory / numbered):
+    if numbered.lower() not in used and valid_audio_file(directory / numbered):
         result = numbered
-    elif legacy.lower() not in used and valid_file(directory / legacy):
+    elif legacy.lower() not in used and valid_audio_file(directory / legacy):
         result = legacy
     else:
         result = numbered
@@ -227,7 +256,7 @@ def download_file(url: str, dest: Path, opener: Callable[..., Any] = urlopen) ->
                 if total > MAX_MEDIA_BYTES:
                     raise ValueError("Media exceeds 100 MB limit")
                 handle.write(chunk)
-        if not valid_file(staged):
+        if not (valid_audio_file(staged) if dest.suffix.lower() == '.m4a' else valid_file(staged)):
             raise ValueError("Empty or suspiciously short media response")
         with staged.open("rb") as handle:
             prefix = handle.read(96).strip().lower()
@@ -250,6 +279,43 @@ def optional_attr(locator: Any, attribute: str) -> str | None:
         return locator.get_attribute(attribute, timeout=500)
     except Exception:
         return None
+
+
+def reached_complete_summary(chapters: list[dict[str, Any]]) -> bool:
+    """Require explicit Introduction -> ... -> Summary, not an arbitrary suffix."""
+    return (
+        len(chapters) >= 2
+        and all(isinstance(chapter, dict) for chapter in chapters)
+        and chapters[0].get("name") == "Introduction"
+        and chapters[-1].get("name") == "Summary"
+    )
+
+
+def select_saved_manifest(previous: Any, incoming: dict[str, Any]) -> dict[str, Any]:
+    """Keep an earlier, more complete chapter inventory after a failed retry."""
+    if not isinstance(previous, dict):
+        return incoming
+    old_chapters = previous.get("chapters")
+    new_chapters = incoming.get("chapters")
+    old_chapters = old_chapters if isinstance(old_chapters, list) else []
+    new_chapters = new_chapters if isinstance(new_chapters, list) else []
+    if not old_chapters or not all(isinstance(c, dict) for c in old_chapters):
+        return incoming
+    if not new_chapters or not all(isinstance(c, dict) for c in new_chapters):
+        return previous
+
+    old_full = previous.get("readerComplete") is True and reached_complete_summary(old_chapters)
+    new_full = incoming.get("readerComplete") is True and reached_complete_summary(new_chapters)
+    if new_full:
+        return incoming
+    if old_full:
+        return previous
+    if (old_chapters[0].get("name") == "Introduction" and
+            new_chapters[0].get("name") != "Introduction"):
+        return previous
+    if len(old_chapters) > len(new_chapters):
+        return previous
+    return incoming
 
 
 def infer_chapter_label(number: str, heading: str) -> str:
@@ -466,7 +532,11 @@ class Downloader:
             raise ValueError("Unexpected book URL")
         directory = self.settings.books_dir / list_name / ident
         manifest = directory / "book.json"
-        existing = read_json(manifest, {})
+        try:
+            existing = read_json(manifest, {})
+        except (OSError, json.JSONDecodeError):
+            print('Existing book metadata is unreadable; retrying from the reader')
+            existing = {}
         if complete_book(existing, directory, self.settings.audio):
             print("Skipping already complete book")
             return True
@@ -514,7 +584,7 @@ class Downloader:
                         used_urls.add(audio_url)
                         if self.settings.audio:
                             target = directory / chapter["fileName"]
-                            if not valid_file(target):
+                            if not valid_audio_file(target):
                                 try:
                                     self._download_with_retry(audio_url, target)
                                 except Exception:
@@ -524,7 +594,7 @@ class Downloader:
                     checkpoint = len(received)
                     nxt = self.page.locator('[data-test-id="nextChapter"]').first
                     if not nxt.is_visible():
-                        reader_complete = name == "Summary" and len(chapters) >= 2
+                        reader_complete = reached_complete_summary(chapters)
                         break
                     nxt.click(timeout=5000)
                     try:
@@ -539,14 +609,15 @@ class Downloader:
             if self.settings.capture_audio:
                 self.page.remove_listener("response", on_response)
 
-        # Do not overwrite prior manifest if an unexpected reader failure
-        # yielded no chapters; this protects resumable downloads.
-        if chapters or not manifest.exists():
-            write_json_atomic(manifest, {
-                **details, "downloadDate": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "orgChapter": original_chapter, "readerComplete": reader_complete,
-                "chapters": chapters,
-            })
+        refreshed = {
+            **details, "downloadDate": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "orgChapter": original_chapter, "readerComplete": reader_complete,
+            "chapters": chapters,
+        }
+        selected = select_saved_manifest(existing, refreshed)
+        if selected is existing:
+            print("Preserved previously saved chapter inventory after incomplete retry")
+        write_json_atomic(manifest, selected)
         if details.get("img"):
             cover = directory / "cover.png"
             if not valid_file(cover):
@@ -578,7 +649,11 @@ class Downloader:
                     if not isinstance(ident, str) or not BOOK_ID.fullmatch(ident):
                         continue
                     directory = self.settings.books_dir / list_name / ident
-                    if complete_book(read_json(directory / "book.json", {}), directory, self.settings.audio):
+                    try:
+                        saved_record = read_json(directory / 'book.json', {})
+                    except (OSError, json.JSONDecodeError):
+                        saved_record = {}
+                    if complete_book(saved_record, directory, self.settings.audio):
                         continue
                     if self.settings.max_books and self.attempted >= self.settings.max_books:
                         print("MAX_BOOKS reached")

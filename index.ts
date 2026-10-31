@@ -5,11 +5,12 @@ import { context, page } from './playwright.js';
 import type { Page } from 'playwright-chromium';
 import fs from 'node:fs';
 import path from 'node:path';
-import { audioFilePath, confirmedReaderEnd, inferChapterLabel, isCompleteManifest, selectAudioFileName, validBookId, validMediaFile, type AudioChapter } from './lib/book-files.js';
+import { audioFilePath, confirmedReaderEnd, inferChapterLabel, isCompleteManifest, selectAudioFileName, selectSavedManifest, validAudioFile, validBookId, validMediaFile, type AudioChapter } from './lib/book-files.js';
 import chalk from 'chalk';
 import { ChapterAudioMonitor, chooseAudioSource } from './lib/audio-capture.js';
 import { scanLibrary } from './lib/library-scan.js';
 import { collectReaderDiagnostics } from './lib/reader-diagnostics.js';
+import { openLibraryDatabase } from './lib/database.js';
 
 type library = 'saved' | 'finished';
 type book = {
@@ -23,11 +24,9 @@ type book = {
   img: string,
 };
 
-fs.mkdirSync('books', { recursive: true });
-// json database to save lists from https://www.blinkist.com/en/app/library
-import { JSONFilePreset } from 'lowdb/node';
-const defaultData : { guides: book[], saved: book[], finished: book[] } = { guides: [], saved: [], finished: [] };
-const db = await JSONFilePreset('books/db.json', defaultData);
+// Opening a dry run must not create books/ or books/db.json.
+const defaultData: { guides: book[], saved: book[], finished: book[] } = { guides: [], saved: [], finished: [] };
+const db = await openLibraryDatabase('books/db.json', defaultData, cfg.dryrun);
 
 const SAVED_LIBRARY = 'https://www.blinkist.com/en/app/library/saved';
 
@@ -96,6 +95,7 @@ const downloadFile = async (url: string, file: string) => {
         throw new Error('Remote server returned HTML/JSON instead of media');
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(tmp, bytes);
+      if (file.endsWith('.m4a') && !validAudioFile(tmp)) throw new Error('Unrecognized audio header');
       fs.renameSync(tmp, file);
       return;
     } catch (error) {
@@ -235,7 +235,7 @@ const downloadBooks = async (page: Page, list: library = 'saved') => {
           // Download while signed URLs are fresh, instead of collecting every URL first.
           if (cfg.audio && audio) {
             const file = audioFilePath(bookDir, chapter);
-            if (file && !validMediaFile(file)) {
+            if (file && !validAudioFile(file)) {
               await downloadFile(audio, file).catch(error =>
                 console.warn('Audio failed for ' + book.id + ' / ' + name + ':', error));
             }
@@ -246,7 +246,7 @@ const downloadBooks = async (page: Page, list: library = 'saved') => {
           if (!(await nextBtn.isVisible().catch(() => false))) {
             // Without a visible next button the UI may have changed, not necessarily ended.
             // Require the known end-of-book Summary and evidence we advanced past chapter one.
-            readerComplete = confirmedReaderEnd(name, chapters.length);
+            readerComplete = confirmedReaderEnd(name, chapters.length, chapters[0]?.name === 'Introduction');
             if (!readerComplete) console.warn('Reader stopped before a confirmed Summary:', book.id);
             break;
           }
@@ -278,7 +278,13 @@ const downloadBooks = async (page: Page, list: library = 'saved') => {
 
     fs.mkdirSync(bookDir, { recursive: true });
     const jsonPart = bookJson + '.part';
-    fs.writeFileSync(jsonPart, JSON.stringify({ ...details, downloadDate: new Date(), orgChapter, readerComplete, chapters }, null, 2));
+    let previous: unknown;
+    try { if (fs.existsSync(bookJson)) previous = JSON.parse(fs.readFileSync(bookJson, 'utf8')); }
+    catch { /* invalid previous metadata can be safely replaced */ }
+    const refreshed = { ...details, downloadDate: new Date(), orgChapter, readerComplete, chapters };
+    const selected = selectSavedManifest(previous, refreshed);
+    if (selected === previous) console.warn('Preserved previous, more complete chapter manifest:', book.id);
+    fs.writeFileSync(jsonPart, JSON.stringify(selected, null, 2));
     fs.renameSync(jsonPart, bookJson);
     if (!readerComplete) console.warn('Incomplete reader traversal:', book.id);
     if (book.img && !validMediaFile(bookDir + 'cover.png'))
@@ -287,7 +293,7 @@ const downloadBooks = async (page: Page, list: library = 'saved') => {
       console.log('Downloading audio files:', chapters.filter(c => c.audio).length);
       for (const chapter of chapters) {
         const file = audioFilePath(bookDir, chapter);
-        if (!chapter.audio || !file || validMediaFile(file)) continue;
+        if (!chapter.audio || !file || validAudioFile(file)) continue;
         await downloadFile(chapter.audio, file).catch(err =>
           console.warn('Audio failed for ' + book.id + ' / ' + chapter.name + ':', err));
       }
