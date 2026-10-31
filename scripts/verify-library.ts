@@ -2,10 +2,31 @@
 // Local inventory only. Never signs in, downloads, or prints private book data.
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { isCompleteManifest, validAudioFile, validMediaFile } from '../lib/book-files.js';
 
 const booksDir = path.resolve(process.env.BOOKS_DIR || 'books');
 const jsonOutput = process.argv.includes('--json');
+const deep = process.argv.includes('--deep'); // optional full decode of local files (CPU-intensive)
+const showProblems = deep && process.argv.includes('--details');
+let deepChecked = 0;
+let deepPlayable = 0;
+let deepDamaged = 0;
+
+function inspectAudio(file: string): void {
+  if (!deep) return;
+  deepChecked++;
+  const goodFile = validMediaFile(file);
+  const result = goodFile ? spawnSync(process.env.FFMPEG || 'ffmpeg', [
+    '-nostdin', '-hide_banner', '-loglevel', 'error',
+    '-i', file, '-map', '0:a:0', '-f', 'null', '-',
+  ], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 600000 }) : null;
+  if (result?.status === 0 && !result.error) deepPlayable++;
+  else {
+    deepDamaged++;
+    if (showProblems) console.error('Invalid local media: ' + path.relative(booksDir, file));
+  }
+}
 
 type Summary = {
   saved: number;
@@ -18,6 +39,7 @@ type Summary = {
   audioFiles: number;
   mp3Files: number;
   m4bFiles: number;
+  deepVerification?: { checked: number; playable: number; damaged: number };
 };
 
 const summary: Summary = {
@@ -33,10 +55,11 @@ for (const list of ['saved', 'finished'] as const) {
     if (!folder.isDirectory()) continue;
     summary[list]++;
     const bookDir = path.join(directory, folder.name);
-    const audioFiles = fs.readdirSync(bookDir)
-      .filter(file => file.toLowerCase().endsWith('.m4a') &&
-        validAudioFile(path.join(bookDir, file)));
+    const mediaNames = fs.readdirSync(bookDir)
+      .filter(file => file.toLowerCase().endsWith('.m4a'));
+    const audioFiles = mediaNames.filter(file => validAudioFile(path.join(bookDir, file)));
     summary.audioFiles += audioFiles.length;
+    for (const file of mediaNames) inspectAudio(path.join(bookDir, file));
 
     const metadata = path.join(bookDir, 'book.json');
     if (!fs.existsSync(metadata)) {
@@ -66,11 +89,17 @@ for (const [format, field, variable] of [
 ] as const) {
   const dir = path.resolve(process.env[variable] || path.join(booksDir, format));
   if (fs.existsSync(dir)) {
-    summary[field] = fs.readdirSync(dir)
-      .filter(file => file.toLowerCase().endsWith('.' + format) &&
-        validMediaFile(path.join(dir, file))).length;
+    const mediaNames = fs.readdirSync(dir)
+      .filter(file => file.toLowerCase().endsWith('.' + format));
+    summary[field] = mediaNames.filter(file => validMediaFile(path.join(dir, file))).length;
+    for (const file of mediaNames) inspectAudio(path.join(dir, file));
   }
 }
+
+if (deep) summary.deepVerification = {
+  checked: deepChecked, playable: deepPlayable, damaged: deepDamaged,
+};
+if (deepDamaged) process.exitCode = 1;
 
 if (jsonOutput) {
   console.log(JSON.stringify(summary, null, 2));
@@ -86,5 +115,12 @@ if (jsonOutput) {
   console.log('Local audio chapters: ' + summary.audioFiles);
   console.log('MP3s created: ' + summary.mp3Files);
   console.log('M4B audiobooks created: ' + summary.m4bFiles);
-  console.log('Inventory is local-only. File presence is not proof of decodable audio.');
+  if (deep) {
+    console.log('Deep audio verification (decoded without saving): ' +
+      deepPlayable + ' passed, ' + deepDamaged + ' damaged/unreadable out of ' + deepChecked);
+    if (deepDamaged) console.log('Use --deep --details to see local paths that need attention.');
+  } else {
+    console.log('Inventory is local-only. File presence is not proof of decodable audio.');
+    console.log('Use --deep to decode-check locally saved audio without writing new media files.');
+  }
 }

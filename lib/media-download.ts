@@ -62,7 +62,10 @@ export async function downloadMediaFile(
       let total = 0;
       let header = new Uint8Array(0);
       let finished = false;
-      const handle = await fs.promises.open(staged, 'w');
+      // Remove a stale .part symlink rather than following it outside books/.
+      // Exclusive creation also prevents a race that would clobber another file.
+      fs.rmSync(staged, { force: true });
+      const handle = await fs.promises.open(staged, 'wx');
       try {
         while (true) {
           const chunk = await reader.read();

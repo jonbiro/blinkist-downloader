@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { checkExportSpace, formatFreeSpace } from '../lib/storage.mjs';
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
@@ -75,15 +76,13 @@ const safeChapterName = name => {
 };
 const validFile = file => {
   try {
-    const stat = fs.statSync(file);
+    const stat = fs.lstatSync(file);
     return stat.isFile() && stat.size > 128;
   } catch {
     return false;
   }
 };
 const naturalCompare = (a, b) => a.localeCompare(b, undefined, { numeric: true });
-const quoteForFfconcat = file =>
-  "'" + file.replaceAll('\\', '/').replaceAll("'", "'\\''") + "'";
 
 // ffmetadata treats =, ;, #, \, and newlines specially.
 const escapeForFfmetadata = input => String(input ?? '')
@@ -177,8 +176,6 @@ function probeMedia(file) {
     return {
       duration,
       codec: audio.codec_name,
-      sampleRate: Number(audio.sample_rate) || 0,
-      channels: Number(audio.channels) || 0,
       tags: info.format?.tags ?? {},
       chapters: info.chapters ?? [],
       hasCover: Boolean(info.streams?.some(stream => stream.disposition?.attached_pic === 1)),
@@ -243,70 +240,54 @@ function writeChapterMetadata(dest, chapterNames, sourceInfos) {
   fs.writeFileSync(dest, metadata);
 }
 
-// FFmpeg's concat demuxer silently assumes identical audio stream layouts.
-// If chapters differ, decode to uniform lossless PCM before the single final
-// MP3/AAC encoding pass. This preserves duration without double lossy encoding.
-function prepareConcatTracks(tracks, sourceInfos, tmpDir) {
-  const first = sourceInfos[0];
-  const compatible = sourceInfos.every(info =>
-    info.codec === first.codec &&
-    info.sampleRate === first.sampleRate &&
-    info.channels === first.channels
-  );
-  if (compatible) return tracks;
-
-  const normalized = [];
-  for (const [index, file] of tracks.entries()) {
-    const dest = path.join(tmpDir, String(index).padStart(3, '0') + '.wav');
-    const result = spawnSync(ffmpeg, [
-      '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-      '-i', file, '-vn', '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2',
-      dest,
-    ], { encoding: 'utf8', timeout: 120000 });
-    if (result.error || result.status !== 0 || !validFile(dest)) {
-      throw new Error('Could not normalize chapter ' + (index + 1) + ': ' +
-        (result.stderr?.trim() || result.error?.message || String(result.status)));
-    }
-    normalized.push(dest);
-  }
-  return normalized;
-}
-
 function transcode(format, dest, details) {
   const { tracks, title, author, chapterNames, cover, sourceInfos, expectedDuration } = details;
   const dir = outputDirs[format];
+  const space = checkExportSpace(dir, expectedDuration, format);
+  if (!space.ok) {
+    throw new Error('Insufficient disk space for ' + format.toUpperCase() +
+      ' export: need about ' + formatFreeSpace(space.requiredBytes) +
+      ', available ' + formatFreeSpace(space.freeBytes) +
+      '. Free space or choose another output directory.');
+  }
   fs.mkdirSync(dir, { recursive: true });
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blinkist-audio-'));
-  const concatFile = path.join(tmpDir, 'chapters.ffconcat');
   const metaFile = path.join(tmpDir, 'chapters.ffmeta');
   const tmpOutput = path.join(dir, '.' + path.basename(dest) + '.' + process.pid + '.part.' + format);
   try {
-    const concatTracks = prepareConcatTracks(tracks, sourceInfos, tmpDir);
-    fs.writeFileSync(concatFile, 'ffconcat version 1.0\n' +
-      concatTracks.map(file => 'file ' + quoteForFfconcat(path.resolve(file)) + '\n').join(''));
-    const argv = [
-      '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-      '-f', 'concat', '-safe', '0', '-i', concatFile,
-    ];
+    // Decode each chapter independently inside a single FFmpeg process.
+    // This joins heterogeneous AAC/sample rates/channels without writing
+    // potentially gigabytes of temporary uncompressed WAV files.
+    const argv = ['-nostdin', '-hide_banner', '-loglevel', 'error', '-y'];
+    for (const track of tracks) argv.push('-i', track);
+    const filters = tracks.map((_, i) =>
+      '[' + i + ':a:0]aresample=48000,aformat=channel_layouts=stereo,' +
+      'asetpts=PTS-STARTPTS[a' + i + ']');
+    filters.push(tracks.map((_, i) => '[a' + i + ']').join('') +
+      'concat=n=' + tracks.length + ':v=0:a=1[combined]');
+    argv.push('-filter_complex', filters.join(';'));
     if (format === 'm4b') {
+      const metadataIndex = tracks.length;
       writeChapterMetadata(metaFile, chapterNames, sourceInfos);
       argv.push('-f', 'ffmetadata', '-i', metaFile);
       if (cover) argv.push('-i', cover);
       argv.push(
-        '-map', '0:a:0', '-map_metadata', '1', '-map_chapters', '1',
+        '-map', '[combined]',
+        '-map_metadata', String(metadataIndex), '-map_chapters', String(metadataIndex),
         '-metadata', 'title=' + title, '-metadata', 'artist=' + author,
         '-metadata', 'album=' + title, '-metadata', 'genre=Audiobook',
         '-c:a', 'aac', '-b:a', '96k',
       );
       if (cover) {
-        argv.push('-map', '2:v:0', '-c:v', 'mjpeg', '-disposition:v:0', 'attached_pic');
+        argv.push('-map', String(metadataIndex + 1) + ':v:0',
+          '-c:v', 'mjpeg', '-disposition:v:0', 'attached_pic');
       } else {
         argv.push('-vn');
       }
       argv.push('-movflags', '+faststart', '-f', 'mp4');
     } else {
       argv.push(
-        '-vn', '-map_metadata', '-1',
+        '-map', '[combined]', '-vn', '-map_metadata', '-1',
         '-metadata', 'title=' + title, '-metadata', 'artist=' + author,
         '-c:a', 'libmp3lame', '-q:a', '4', '-id3v2_version', '3',
       );

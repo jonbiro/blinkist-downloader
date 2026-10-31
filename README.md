@@ -27,7 +27,7 @@ Run `DRYRUN=1 npm start` to inspect library listings without saving book metadat
 
 | Command | What it does |
 |---|---|
-| `npm run doctor` | Checks Node.js, FFmpeg, FFprobe, and the local browser setup without logging into Blinkist |
+| `npm run doctor` | Checks Node.js, FFmpeg, FFprobe, browser setup and available disk space without logging into Blinkist |
 | `MAX_BOOKS=1 npm start` | Test up to one pending book; manual Blinkist login |
 | `DOWNLOAD=0 npm start` | Update library index only |
 | `DRYRUN=1 npm start` | Preview without writing book files |
@@ -41,6 +41,8 @@ Run `DRYRUN=1 npm start` to inspect library listings without saving book metadat
 | `npm run export:m4b -- --force` | Re-export eligible M4Bs (also supported for MP3 or both formats) |
 | `npm run verify:library` | Offline counts of complete/incomplete books, chapters, MP3s and M4Bs |
 | `npm run verify:library -- --json` | Machine-readable local counts with no book titles or media URLs |
+| `npm run verify:library -- --deep` | Decode-test existing audio locally without writing new files (can be CPU-intensive) |
+| `npm run verify:library -- --deep --details` | Show relative paths of damaged files, only when explicitly requested |
 | `npm run check` | TypeScript type-check of the downloader |
 | `npm run test:browser` | Chrome fixture tests for audio detection, pagination, and redacted diagnostics; no Blinkist login |
 | `npm test` | Run offline storage and media conversion tests |
@@ -63,6 +65,23 @@ Configure environment variables in your shell or a local `.env` file (which is i
 | `BOOKS_DIR` | `books` | Shared book directory used by the Chrome downloader, Camoufox, and MP3/M4B exporter |
 | `MP3_DIR` | `books/mp3` | Output MP3 directory |
 | `M4B_DIR` | `books/m4b` | Output M4B audiobook directory |
+
+## Storage and file safety
+
+Long audiobooks are now concatenated through FFmpeg's streaming audio filters,
+including when chapter sample rates differ. No multi-gigabyte temporary WAV
+tracks are created. Before each export, the app estimates output size and
+keeps a free-space margin; if there is insufficient room it reports an error
+without replacing your existing MP3/M4B file.
+
+Run `npm run doctor` to see how much space is available. It warns when below
+2 GiB, and bulk exports are best done with more free space. You may also export
+directly to another volume by setting `M4B_DIR` or `MP3_DIR`, for example:
+`M4B_DIR="/Volumes/External/Audiobooks" npm run export:m4b`.
+
+Files linked via symlinks are not trusted as saved audio, and stale
+`.part` symlinks cannot overwrite other files. Downloads and exports
+remain local to your machine.
 
 ## Choosing MP3 or M4B
 
@@ -107,7 +126,7 @@ The Saved/Finished scanner checkpoints newly discovered titles after **each comp
 
 When the reader changes or audio cannot be located, use `DIAGNOSE=1 MAX_BOOKS=1 npm start` to print only counts of recognized reader/audio elements and URL *types*, never book text, query strings, signed media URLs, or cookies. This mode still needs you to sign in manually and may move a book into Finished; do not upload `browser/`, `books/`, or complete browser logs.
 
-`npm run verify:library` is completely offline and does not require a Blinkist login. It summarizes partial/complete downloads and MP3 count, but only checks file presence, not media decodability.
+`npm run verify:library` is completely offline and does not require a Blinkist login. It summarizes partial/complete downloads, MP3s and M4Bs using lightweight file checks. Add `--deep` to decode-test audio (including MP3/M4B outputs) without creating files; this can take longer for a large library. By default it prints only counts. Use `--deep --details` if you want the relative paths of damaged tracks, which may reveal book IDs on your screen.
 
 ## File layout
 

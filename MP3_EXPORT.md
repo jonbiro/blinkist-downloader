@@ -24,7 +24,7 @@ The exporter automatically rebuilds an MP3 or M4B if it is corrupt, stale, abnor
 
 Use `npm run export:m4b -- --force` to rebuild every M4B or `npm run export:both -- --force` for both formats. Set `BOOKS_DIR` for input, `MP3_DIR` for MP3 output, or `M4B_DIR` for audiobook output.
 
-Run `npm run verify:library` for local counts of complete/incomplete books, MP3s, and M4Bs. To share only non-identifying counts when troubleshooting, use `npm run verify:library -- --json`. The inventory does not verify that each M4A can be decoded; the exporter performs that check.
+Run `npm run verify:library` for local counts of complete/incomplete books, MP3s and M4Bs. To share only non-identifying counts when troubleshooting, use `npm run verify:library -- --json`. Basic inventory verifies file headers, not full playback. Use `npm run verify:library -- --deep` to decode-test every local M4A, MP3 and M4B with FFmpeg **without writing output files**; this can be CPU-intensive. Failed media counts cause a nonzero exit. Add `--details` to reveal only the local relative paths of problematic media files, never remote signed URLs.
 
 ### Experimental network-media fallback
 
@@ -43,7 +43,7 @@ Each downloaded book has a `book.json` with the ordered chapter list. Modern man
 
 - `readerComplete: false` means chapter traversal stopped early. **Neither MP3 nor M4B is produced.** A previous `readerComplete: true` flag is also rejected when its chapters do not run from Introduction through Summary.
 - All chapters must have audio URLs and corresponding locally saved files. Missing chapters cause a skip rather than a partial export.
-- The exporter verifies that each source file contains decodable audio (using FFprobe) and validates final MP3/M4B duration. Chapters with different sample rates, channel counts, or codecs are temporarily normalized to lossless PCM before the final encoding pass; originals are left untouched.
+- The exporter uses FFprobe to check source audio and validates final MP3/M4B duration. Chapters with different sample rates, channel counts or codecs are resampled **in a single FFmpeg process**, without creating large intermediate uncompressed WAV files. Original chapter files remain unchanged.
 - Failed transcoding never replaces an existing MP3 or M4B; output is staged and renamed only after validation. If a book appears in both Saved and Finished, the exporter selects one eligible copy, favoring a confirmed complete version with more chapters.
 - Older manifests without `readerComplete` are supported on a best-effort basis. Without a known manifest, legacy M4A files are sorted by their filenames; completeness cannot be guaranteed.
 

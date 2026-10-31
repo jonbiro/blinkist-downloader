@@ -79,3 +79,43 @@ test('empty inventory reports zeros without creating a download directory', () =
     assert.equal(fs.existsSync(booksDir), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('deep verification decodes valid audio and flags corrupt files without revealing titles', {
+  skip: spawnSync('ffmpeg', ['-version'], {stdio: 'ignore'}).status !== 0,
+}, () => {
+  const root = makeTemp();
+  const booksDir = path.join(root, 'books');
+  try {
+    const bookDir = addBook(booksDir, 'saved', 'private-book-en', {
+      title: 'PRIVATE BOOK TITLE',
+      readerComplete: false,
+      chapters: [],
+    });
+    const good = path.join(bookDir, 'Introduction.m4a');
+    const conversion = spawnSync('ffmpeg', [
+      '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+      '-f', 'lavfi', '-i', 'sine=frequency=600:duration=0.3',
+      '-c:a', 'aac', good,
+    ], {encoding: 'utf8'});
+    assert.equal(conversion.status, 0, conversion.stderr);
+    fs.writeFileSync(path.join(bookDir, 'Damaged.m4a'), fakeAudio);
+    const before = fs.readdirSync(bookDir).sort();
+    const command = ['--import', 'tsx', script, '--deep', '--json'];
+    const result = spawnSync(process.execPath, command, {
+      cwd: repository,
+      env: {...process.env, BOOKS_DIR: booksDir},
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 1);
+    const summary = JSON.parse(result.stdout);
+    assert.deepEqual(summary.deepVerification, {checked: 2, playable: 1, damaged: 1});
+    assert.doesNotMatch(result.stdout, /PRIVATE BOOK TITLE|private-book-en|Damaged\.m4a/);
+    assert.deepEqual(fs.readdirSync(bookDir).sort(), before);
+
+    const details = spawnSync(process.execPath, [...command, '--details'], {
+      cwd: repository, env: {...process.env, BOOKS_DIR: booksDir}, encoding: 'utf8',
+    });
+    assert.equal(details.status, 1);
+    assert.match(details.stderr, /Damaged\.m4a/);
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});

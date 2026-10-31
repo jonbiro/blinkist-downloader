@@ -42,7 +42,7 @@ export const validBookId = (id: string): boolean =>
 
 export const validMediaFile = (file: string): boolean => {
   try {
-    const stat = fs.statSync(file);
+    const stat = fs.lstatSync(file);
     return stat.isFile() && stat.size > 128;
   } catch {
     return false;

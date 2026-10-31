@@ -44,10 +44,10 @@ function createCover(dir) {
   assert.equal(result.status, 0, result.stderr);
 }
 
-function run(home, format = 'm4b', extra = []) {
+function run(home, format = 'm4b', extra = [], envExtra = {}) {
   return spawnSync(process.execPath, [exporter, '--format', format, ...extra], {
     cwd: home,
-    env: { ...process.env, BOOKS_DIR: path.join(home, 'books') },
+    env: { ...process.env, BOOKS_DIR: path.join(home, 'books'), ...envExtra },
     encoding: 'utf8',
   });
 }
@@ -313,4 +313,37 @@ test('single-book and title-search export filters never process unrelated books'
     assert.match(missing.stderr, /No matching local books/);
     assert.equal(fs.readdirSync(path.join(home, 'books', 'm4b')).length, 2);
   } finally { fs.rmSync(home, {recursive: true, force: true}); }
+});
+
+test('mixed sample-rate export uses one FFmpeg process with no staged PCM WAV conversion', {
+  skip: !hasTools || process.platform === 'win32',
+}, () => {
+  const home = root();
+  try {
+    const dir = createBook(home, ['Introduction', 'Summary']);
+    createAudio(dir, 'Introduction', 440, 22050);
+    createAudio(dir, 'Summary', 720, 48000);
+    const wrapper = path.join(home, 'ffmpeg-wrapper.mjs');
+    const log = path.join(home, 'ffmpeg-invocations.jsonl');
+    fs.writeFileSync(wrapper, [
+      '#!/usr/bin/env node',
+      "import fs from 'node:fs';",
+      "import { spawnSync } from 'node:child_process';",
+      "const args = process.argv.slice(2);",
+      "fs.appendFileSync(process.env.FFMPEG_CAPTURE_LOG, JSON.stringify(args) + '\\n');",
+      "const result = spawnSync('ffmpeg', args, { stdio: 'inherit' });",
+      "process.exit(result.status ?? 1);",
+    ].join('\n'));
+    fs.chmodSync(wrapper, 0o755);
+    const result = run(home, 'm4b', [], {
+      FFMPEG: wrapper, FFMPEG_CAPTURE_LOG: log,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const invocations = fs.readFileSync(log, 'utf8').trim().split('\n')
+      .map(line => JSON.parse(line));
+    assert.equal(invocations.length, 1,
+      'Audio conversion must not create separate uncompressed WAV intermediates');
+    assert.equal(invocations[0].includes('pcm_s16le'), false);
+    assert.equal(probe(outputFile(home, 'm4b')).chapters.length, 2);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

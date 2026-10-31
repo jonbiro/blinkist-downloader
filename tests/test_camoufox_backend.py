@@ -252,6 +252,28 @@ class Helpers(unittest.TestCase):
                 download_file('https://media.example.com/signed.m4a', path, truncated)
             self.assertEqual(path.stat().st_size, 512)
 
+    def test_symlink_chapters_and_stale_part_files_cannot_escape_book_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outside = root / 'private-file.m4a'
+            outside.write_bytes(FAKE_AUDIO)
+            chapter = root / 'chapter.m4a'
+            chapter.symlink_to(outside)
+            self.assertFalse(valid_audio_file(chapter))
+
+            chapter.unlink()
+            private = root / 'private-notes.txt'
+            private.write_text('IMPORTANT PRIVATE DATA', encoding='utf-8')
+            part = root / 'chapter.m4a.part'
+            part.symlink_to(private)
+            def local_response(url, timeout):
+                return FakeHttp()
+            download_file('https://media.example.com/a.m4a', chapter, local_response)
+            self.assertEqual(outside.read_bytes(), FAKE_AUDIO)
+            self.assertEqual(private.read_text(encoding='utf-8'), 'IMPORTANT PRIVATE DATA')
+            self.assertEqual(chapter.read_bytes(), FAKE_AUDIO)
+            self.assertFalse(part.exists())
+
     def test_corrupt_audio_and_misclassified_saved_manifests_are_incomplete(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)

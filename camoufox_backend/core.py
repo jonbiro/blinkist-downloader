@@ -84,7 +84,7 @@ def safe_name(name: str) -> str:
 
 def valid_file(path: Path) -> bool:
     try:
-        return path.is_file() and path.stat().st_size > 128
+        return not path.is_symlink() and path.is_file() and path.stat().st_size > 128
     except OSError:
         return False
 
@@ -234,7 +234,10 @@ def download_file(url: str, dest: Path, opener: Callable[..., Any] = urlopen) ->
     dest.parent.mkdir(parents=True, exist_ok=True)
     staged = dest.with_name(dest.name + ".part")
     try:
-        with opener(url, timeout=30) as response, staged.open("wb") as handle:
+        # Never follow an old .part symlink that points outside the library.
+        # Exclusive creation protects against another process replacing it.
+        staged.unlink(missing_ok=True)
+        with opener(url, timeout=30) as response, staged.open("xb") as handle:
             final_url = getattr(response, "geturl", lambda: url)()
             if not final_url.startswith("https://"):
                 raise ValueError("Media response redirected outside HTTPS")

@@ -134,3 +134,23 @@ test('shorter retry refreshes matching signed chapter links without losing known
   assert.equal(chosen.chapters?.[2].audio, 'https://cdn.test/expired3');
   assert.equal(old.chapters[0].audio, 'https://cdn.test/expired');
 });
+
+test('a symlinked chapter cannot be treated as downloaded audio', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'blinkist-symlink-test-'));
+  try {
+    const bookDir = path.join(root, 'book');
+    fs.mkdirSync(bookDir);
+    const outside = path.join(root, 'outside.m4a');
+    fs.writeFileSync(outside, exampleM4a);
+    fs.symlinkSync(outside, path.join(bookDir, 'Introduction.m4a'));
+    fs.writeFileSync(path.join(bookDir, 'Summary.m4a'), exampleM4a);
+    assert.equal(validAudioFile(path.join(bookDir, 'Introduction.m4a')), false);
+    const manifest = {readerComplete: true, chapters: [
+      {name: 'Introduction', audio: 'https://example.test/intro.m4a'},
+      {name: 'Summary', audio: 'https://example.test/summary.m4a'},
+    ]};
+    assert.equal(isCompleteManifest(manifest, bookDir), false);
+  } finally {
+    fs.rmSync(root, {recursive: true, force: true});
+  }
+});

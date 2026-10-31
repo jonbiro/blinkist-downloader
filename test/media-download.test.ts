@@ -132,3 +132,19 @@ test('stream error cleans up partial download and leaves existing audio intact',
     assert.equal(fs.existsSync(dest + '.part'), false);
   } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });
+
+test('stale temporary symlink cannot overwrite a file outside the book directory', async () => {
+  const {root, dest} = temporaryDestination();
+  try {
+    fs.mkdirSync(path.dirname(dest), {recursive: true});
+    const outside = path.join(root, 'private-notes.txt');
+    fs.writeFileSync(outside, 'PRIVATE NOTES MUST REMAIN UNCHANGED');
+    fs.symlinkSync(outside, dest + '.part');
+    await downloadMediaFile(mediaUrl, dest, {
+      attempts: 1, fetchImpl: async () => response(audio),
+    });
+    assert.equal(fs.readFileSync(outside, 'utf8'), 'PRIVATE NOTES MUST REMAIN UNCHANGED');
+    assert.deepEqual(fs.readFileSync(dest), Buffer.from(audio));
+    assert.equal(fs.existsSync(dest + '.part'), false);
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
