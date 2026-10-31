@@ -310,14 +310,31 @@ def select_saved_manifest(previous: Any, incoming: dict[str, Any]) -> dict[str, 
     new_full = incoming.get("readerComplete") is True and reached_complete_summary(new_chapters)
     if new_full:
         return incoming
-    if old_full:
-        return previous
-    if (old_chapters[0].get("name") == "Introduction" and
-            new_chapters[0].get("name") != "Introduction"):
-        return previous
-    if len(old_chapters) > len(new_chapters):
-        return previous
-    return incoming
+    keep_old = (
+        old_full or
+        (old_chapters[0].get("name") == "Introduction" and
+         new_chapters[0].get("name") != "Introduction") or
+        len(old_chapters) > len(new_chapters)
+    )
+    if not keep_old:
+        return incoming
+
+    updated = False
+    merged = []
+    for index, chapter in enumerate(old_chapters):
+        fresh = new_chapters[index] if index < len(new_chapters) else None
+        if (fresh and chapter.get("name") == fresh.get("name") and
+                (not chapter.get("title") or not fresh.get("title") or
+                 chapter["title"] == fresh["title"]) and
+                isinstance(fresh.get("audio"), str) and
+                fresh["audio"].startswith("https://") and
+                fresh["audio"] != chapter.get("audio")):
+            merged.append({**chapter, "audio": fresh["audio"],
+                           "audioSource": fresh.get("audioSource")})
+            updated = True
+        else:
+            merged.append(chapter)
+    return {**previous, "chapters": merged} if updated else previous
 
 
 def infer_chapter_label(number: str, heading: str) -> str:
@@ -656,6 +673,25 @@ class Downloader:
         if selected is existing:
             print("Preserved previously saved chapter inventory after incomplete retry")
         write_json_atomic(manifest, selected)
+
+        # A shorter retry may retain older chapters not visited this time.
+        # Retry any missing retained tracks using the saved links, while never
+        # overwriting a chapter that is already valid.
+        if self.settings.audio:
+            visited_files = {chapter_file(ch) for ch in chapters}
+            for old_chapter in selected.get("chapters", []):
+                if not isinstance(old_chapter, dict):
+                    continue
+                filename = chapter_file(old_chapter)
+                audio_url = old_chapter.get("audio")
+                if not filename or filename in visited_files or not isinstance(audio_url, str):
+                    continue
+                target = directory / filename
+                if not valid_audio_file(target):
+                    try:
+                        self._download_with_retry(audio_url, target)
+                    except Exception:
+                        print("Retained chapter audio could not be recovered (URL redacted)")
         if details.get("img"):
             cover = directory / "cover.png"
             if not valid_file(cover):

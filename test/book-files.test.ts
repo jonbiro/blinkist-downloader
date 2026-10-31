@@ -115,3 +115,22 @@ test('interrupted retries preserve longer, more complete chapter manifests', () 
   assert.equal(selectSavedManifest(previous, repaired), repaired);
   assert.equal(selectSavedManifest(null, empty), empty);
 });
+
+test('shorter retry refreshes matching signed chapter links without losing known chapters', () => {
+  const old = {readerComplete: true, chapters: [
+    {name: 'Introduction', title: 'Intro', audio: 'https://cdn.test/expired', fileName: '001 - Introduction.m4a'},
+    {name: 'Key idea 1', title: 'Idea', audio: 'https://cdn.test/expired2', fileName: '002 - Key idea 1.m4a'},
+    {name: 'Summary', title: 'Summary', audio: 'https://cdn.test/expired3', fileName: '003 - Summary.m4a'},
+  ]};
+  const newPartial = {readerComplete: false, chapters: [
+    {name: 'Introduction', title: 'Intro', audio: 'https://cdn.test/fresh'},
+    {name: 'Key idea 1', title: 'DIFFERENT TITLE', audio: 'https://cdn.test/wrong'},
+  ]};
+  const chosen = selectSavedManifest(old, newPartial);
+  assert.equal(chosen.chapters?.length, 3);
+  assert.equal(chosen.chapters?.[0].audio, 'https://cdn.test/fresh');
+  assert.equal(chosen.chapters?.[0].fileName, '001 - Introduction.m4a');
+  assert.equal(chosen.chapters?.[1].audio, 'https://cdn.test/expired2');
+  assert.equal(chosen.chapters?.[2].audio, 'https://cdn.test/expired3');
+  assert.equal(old.chapters[0].audio, 'https://cdn.test/expired');
+});

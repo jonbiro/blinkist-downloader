@@ -266,8 +266,11 @@ const downloadBooks = async (page: Page, list: library = 'saved') => {
         .catch(err => console.warn('Cover failed:', err));
     }
     if (cfg.audio) {
-      console.log('Downloading audio files:', chapters.filter(c => c.audio).length);
-      for (const chapter of chapters) {
+      // When an incomplete retry retained an older, longer manifest, attempt
+      // its missing chapters too, not only the shorter list visited today.
+      const savedChapters = Array.isArray(selected.chapters) ? selected.chapters : [];
+      console.log('Downloading audio files:', savedChapters.filter(c => c.audio).length);
+      for (const chapter of savedChapters) {
         const file = audioFilePath(bookDir, chapter);
         if (!chapter.audio || !file || validAudioFile(file)) continue;
         await downloadMediaFile(chapter.audio, file).catch(err =>

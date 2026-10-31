@@ -87,3 +87,48 @@ test('retries a transient fetch error and keeps signed URLs out of errors', asyn
     assert.deepEqual(fs.readFileSync(dest), Buffer.from(audio));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('streams audio in multiple chunks without using arrayBuffer()', async () => {
+  const {root, dest} = temporaryDestination();
+  try {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(audio.subarray(0, 7));
+        controller.enqueue(audio.subarray(7, 350));
+        controller.enqueue(audio.subarray(350));
+        controller.close();
+      },
+    });
+    const streamed = new Response(body, {
+      status: 200, headers: {'content-type': 'audio/mp4'},
+    });
+    Object.defineProperty(streamed, 'arrayBuffer', {
+      value: () => { throw new Error('Must not buffer full media response'); },
+    });
+    await downloadMediaFile(mediaUrl, dest, {attempts: 1, fetchImpl: async () => streamed});
+    assert.deepEqual(fs.readFileSync(dest), Buffer.from(audio));
+    assert.equal(fs.existsSync(dest + '.part'), false);
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
+
+test('stream error cleans up partial download and leaves existing audio intact', async () => {
+  const {root, dest} = temporaryDestination();
+  try {
+    fs.mkdirSync(path.dirname(dest), {recursive: true});
+    fs.writeFileSync(dest, audio);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(audio.subarray(0, 200));
+        controller.error(new Error('connection interrupted'));
+      },
+    });
+    await assert.rejects(downloadMediaFile(mediaUrl, dest, {
+      attempts: 1,
+      fetchImpl: async () => new Response(body, {
+        status: 200, headers: {'content-type': 'audio/mp4'},
+      }),
+    }), /connection interrupted/);
+    assert.deepEqual(fs.readFileSync(dest), Buffer.from(audio));
+    assert.equal(fs.existsSync(dest + '.part'), false);
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});

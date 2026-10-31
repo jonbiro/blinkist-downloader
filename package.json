@@ -15,7 +15,7 @@
     "start": "tsx ./index.ts",
     "export:mp3": "node ./scripts/export-audio.mjs --format mp3",
     "test:mp3": "node --test ./test/export-mp3.test.mjs",
-    "test:core": "node --import tsx --test ./test/book-files.test.ts ./test/audio-capture.test.ts ./test/database.test.ts ./test/media-download.test.ts",
+    "test:core": "node --import tsx --test ./test/book-files.test.ts ./test/audio-capture.test.ts ./test/database.test.ts ./test/media-download.test.ts ./test/run-options.test.ts",
     "test": "npm run test:core && npm run test:inventory && npm run test:mp3 && npm run test:m4b",
     "check": "tsc --noEmit -p tsconfig.json",
     "doctor": "node ./scripts/doctor.mjs",

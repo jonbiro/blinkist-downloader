@@ -14,6 +14,10 @@ From the repository directory:
 6. `npm run export:both` — make both formats from the same saved chapters.
 7. Transfer the format supported by your MP3 player or audiobook app.
 
+### Select specific books without exporting the entire library
+
+Run `npm run export:m4b -- --list` to list locally saved book IDs and titles without writing files. Use `npm run export:both -- --book book-id-en` to export exactly one book, or `npm run export:m4b -- --search "part of a title"` to match books by title, author, or ID. These options work with `--dry-run` and `--force`; unmatched queries fail with an explanatory message instead of silently processing the full library.
+
 FFmpeg and FFprobe are required. On macOS install them with `brew install ffmpeg`.
 
 The exporter automatically rebuilds an MP3 or M4B if it is corrupt, stale, abnormally short, or its metadata is outdated. For M4B, it additionally checks the chapter count/titles and expected cover artwork. Existing verified exports are skipped.
@@ -60,7 +64,7 @@ modify or remove your original M4A chapters.
 
 ## Filename and playback compatibility
 
-Output naming: `Book title - Author [book-id].mp3` or `.m4b`. Long titles are shortened to stay within filesystem limits. Files use ID3v2.3 title and artist tags and are transcoded to MP3 by FFmpeg. Chapter files are concatenated in manifest order.
+Output naming: `Book title - Author [book-id].mp3` or `.m4b`. When the book ID is unusually long, a short stable hash is appended to the truncated ID to prevent two books from producing the same output filename; ordinary-length IDs retain their existing filenames. Long titles are shortened to stay within filesystem limits. Files use ID3v2.3 title and artist tags and are transcoded to MP3 by FFmpeg. Chapter files are concatenated in manifest order.
 
 The export format is intended for ordinary MP3 players but has not been tested on every model. This converter does not modify protected files or remove copy protection.
 

@@ -56,25 +56,47 @@ export async function downloadMediaFile(
         if (declaredLength > MAX_MEDIA_BYTES) throw new Error('Media file exceeds 100 MB limit');
       }
 
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.length <= 128 || bytes.length > MAX_MEDIA_BYTES) {
-        throw new Error('Empty, unexpectedly short, or oversized media file');
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('Media response has no downloadable body');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      let total = 0;
+      let header = new Uint8Array(0);
+      let finished = false;
+      const handle = await fs.promises.open(staged, 'w');
+      try {
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) { finished = true; break; }
+          const bytes = chunk.value;
+          total += bytes.byteLength;
+          if (total > MAX_MEDIA_BYTES) throw new Error('Media file exceeds 100 MB limit');
+          if (header.length < 96) {
+            header = Uint8Array.from([...header, ...bytes.subarray(0, 96 - header.length)]);
+          }
+          let offset = 0;
+          while (offset < bytes.byteLength) {
+            const { bytesWritten } = await handle.write(bytes, offset, bytes.byteLength - offset);
+            if (bytesWritten <= 0) throw new Error('Could not write media data');
+            offset += bytesWritten;
+          }
+        }
+      } finally {
+        if (!finished) await reader.cancel().catch(() => {});
+        reader.releaseLock();
+        await handle.close();
       }
+      if (total <= 128) throw new Error('Empty or unexpectedly short media file');
       const encoding = (response.headers.get('content-encoding') ?? 'identity').toLowerCase();
-      // Node fetch may transparently decompress encoded responses, making the
-      // bytes length legitimately differ from the original Content-Length.
-      if (declaredLength !== undefined && (encoding === 'identity' || !encoding)
-          && bytes.length !== declaredLength) {
+      // Node fetch may transparently decompress encoded responses.
+      if (declaredLength !== undefined && encoding === 'identity'
+          && total !== declaredLength) {
         throw new Error('Truncated or incomplete media response (length mismatch)');
       }
-
-      const prefix = Buffer.from(bytes.subarray(0, 96)).toString('utf8').trimStart().toLowerCase();
+      const prefix = Buffer.from(header).toString('utf8').trimStart().toLowerCase();
       if (prefix.startsWith('<html') || prefix.startsWith('<!doctype html')
           || prefix.startsWith('{"error"')) {
         throw new Error('Remote server returned HTML/JSON instead of media');
       }
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(staged, bytes);
       if (file.toLowerCase().endsWith('.m4a') && !validAudioFile(staged)) {
         throw new Error('Downloaded response does not have recognizable audio header');
       }

@@ -129,10 +129,25 @@ export const selectSavedManifest = <T extends BookManifest>(
     latest[latest.length - 1]?.name, latest.length, latest[0]?.name === 'Introduction',
   );
   if (newFull) return incoming;
-  if (oldFull) return old;
-  if (earlier[0]?.name === 'Introduction' && latest[0]?.name !== 'Introduction') return old;
-  if (earlier.length > latest.length) return old;
-  return incoming;
+  const keepOld = oldFull
+    || (earlier[0]?.name === 'Introduction' && latest[0]?.name !== 'Introduction')
+    || earlier.length > latest.length;
+  if (!keepOld) return incoming;
+
+  // Preserve the longer existing list, but retain fresh, time-limited URLs
+  // from a shorter retry ONLY where chapter labels (and titles) agree.
+  // File names and chapter ordering always come from the preserved manifest.
+  let refreshed = false;
+  const merged = earlier.map((chapter, index) => {
+    const fresh = latest[index];
+    if (!chapter || !fresh || chapter.name !== fresh.name ||
+        (chapter.title && fresh.title && chapter.title !== fresh.title) ||
+        typeof fresh.audio !== 'string' || !fresh.audio.startsWith('https://') ||
+        fresh.audio === chapter.audio) return chapter;
+    refreshed = true;
+    return { ...chapter, audio: fresh.audio, audioSource: fresh.audioSource };
+  });
+  return refreshed ? { ...old, chapters: merged } : old;
 };
 
 // A reader that stopped halfway through must never be treated as fully downloaded.

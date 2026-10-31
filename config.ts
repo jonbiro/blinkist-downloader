@@ -1,5 +1,6 @@
 import * as dotenv from 'dotenv';
 import { existsSync } from 'node:fs';
+import { parseMaxBooks } from './lib/run-options.js';
 
 dotenv.config({ path: '.env' }); // loads env vars from file - will not set vars that are already set, i.e., can overwrite values from file by prefixing, e.g., VAR=VAL node ...
 
@@ -19,7 +20,7 @@ export const cfg = {
   browserChannel: process.env.BROWSER_CHANNEL || (process.platform === 'darwin' && existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') ? 'chrome' : undefined),
   update: process.env.UPDATE != '0', // set to 0 to disable updating library
   checkall: process.env.CHECKALL != '0', // full scan by default; set 0 only if your library is strictly append-only
-  maxBooks: Math.max(0, Number(process.env.MAX_BOOKS) || 0), // limit download attempts across both libraries (0 = all)
+  maxBooks: parseMaxBooks(process.env.MAX_BOOKS), // 1 pending book by default; explicit 0 = unlimited
   download: process.env.DOWNLOAD != '0', // set to 0 to disable downloading books
   audio: process.env.AUDIO != '0', // set to 0 to disable downloading audio
   captureAudio: process.env.CAPTURE_AUDIO != '0', // observe ordinary HTTPS audio responses when reader exposes blob: sources

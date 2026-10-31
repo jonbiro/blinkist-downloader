@@ -21,7 +21,7 @@ On Linux, install Chromium using `npx playwright install chromium`, or specify `
 
 Run `DRYRUN=1 npm start` to inspect library listings without saving book metadata or audio files (a browser profile may still be written). Or run `DOWNLOAD=0 npm start` to update only the `books/db.json` library index.
 
-**Do not run an unlimited download as your first test.** `MAX_BOOKS=1` limits the downloader to one book across both lists; omit it only when you've verified a single book.
+**Safe first-run default:** Both downloader backends now attempt at most one pending book unless you explicitly set `MAX_BOOKS=0` (unlimited) or a different positive limit. Mistyped limits are rejected rather than treated as unlimited. Test a single book before increasing the cap.
 
 ## Commands
 
@@ -35,6 +35,9 @@ Run `DRYRUN=1 npm start` to inspect library listings without saving book metadat
 | `npm run export:mp3` | One MP3 per complete book in `books/mp3/` |
 | `npm run export:m4b` | One chaptered M4B audiobook per book in `books/m4b/`, with cover art when available |
 | `npm run export:both` | Produce both MP3 and M4B from the same saved chapters |
+| `npm run export:m4b -- --list` | Show local book titles and IDs without exporting |
+| `npm run export:m4b -- --book book-id-en` | Export a specific book by its exact local ID |
+| `npm run export:both -- --search "title words"` | Export titles matching the specified text (title, author, or book ID) |
 | `npm run export:m4b -- --force` | Re-export eligible M4Bs (also supported for MP3 or both formats) |
 | `npm run verify:library` | Offline counts of complete/incomplete books, chapters, MP3s and M4Bs |
 | `npm run verify:library -- --json` | Machine-readable local counts with no book titles or media URLs |
@@ -46,7 +49,7 @@ Configure environment variables in your shell or a local `.env` file (which is i
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MAX_BOOKS` | `0` (unlimited) | Limit pending download attempts across both library lists |
+| `MAX_BOOKS` | `1` | Maximum pending download attempts across both lists; explicit `0` means unlimited. Invalid values fail instead of downloading everything |
 | `UPDATE` | `1` | Set `0` to skip refreshing library lists |
 | `DOWNLOAD` | `1` | Set `0` to skip downloading books |
 | `DRYRUN` | `0` | Preview without writing book data or media |

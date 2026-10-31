@@ -7,10 +7,34 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const force = args.includes('--force');
+const listOnly = args.includes('--list');
+function optionValue(flag) {
+  const equals = args.find(value => value.startsWith(flag + '='));
+  if (equals !== undefined) {
+    const value = equals.slice(flag.length + 1).trim();
+    if (!value) throw new Error('Expected a non-empty value for ' + flag);
+    return value;
+  }
+  const index = args.indexOf(flag);
+  if (index === -1) return null;
+  const value = args[index + 1];
+  if (!value || value.startsWith('--')) throw new Error('Expected a value for ' + flag);
+  return value.trim();
+}
+let selectedBookId;
+let searchTerm;
+try {
+  selectedBookId = optionValue('--book');
+  searchTerm = optionValue('--search')?.toLowerCase();
+} catch (error) {
+  console.error(error.message);
+  process.exit(2);
+}
 const formatFlag = args.find(a => a.startsWith('--format='));
 const formatIndex = args.indexOf('--format');
 const format = formatFlag?.slice('--format='.length) ??
@@ -352,8 +376,25 @@ if (!fs.existsSync(booksDir)) {
   console.error('Books folder not found: ' + booksDir);
   process.exit(1);
 }
-const entries = listBooks();
+const entries = listBooks().filter(entry => {
+  const title = typeof entry.book.title === 'string' ? entry.book.title : '';
+  const author = typeof entry.book.author === 'string' ? entry.book.author : '';
+  return (!selectedBookId || entry.id === selectedBookId) &&
+    (!searchTerm || (title + ' ' + author + ' ' + entry.id).toLowerCase().includes(searchTerm));
+});
 const { books, duplicateCopies } = selectBestCopies(entries);
+if ((selectedBookId || searchTerm) && books.length === 0) {
+  console.error('No matching local books. Use --list to inspect available titles and IDs.');
+  process.exit(1);
+}
+if (listOnly) {
+  for (const book of books) {
+    console.log(book.id + ' | ' + (book.book.title || 'Untitled') +
+      ' | ' + (book.book.author || 'Unknown Author'));
+  }
+  console.log(books.length + ' local book(s) matched. No exports were created.');
+  process.exit(0);
+}
 let exported = 0;
 let skipped = duplicateCopies * requestedFormats.length;
 let failed = 0;
@@ -389,8 +430,14 @@ for (const entry of books) {
     tracks, chapterNames, sourceInfos, expectedDuration, title, author,
     cover, manifestFile: entry.manifestFile,
   };
+  // Keep historical names for ordinary IDs. Include a stable hash when an
+  // unusually long ID is truncated, so distinct books cannot overwrite each other.
+  const idPrefix = limitBytes(id, 45);
+  const uniqueId = Buffer.byteLength(cleanName(id), 'utf8') > 45
+    ? idPrefix + '~' + createHash('sha256').update(id).digest('hex').slice(0, 12)
+    : idPrefix;
   const baseName = limitBytes(title, 100) + ' - ' + limitBytes(author, 55) +
-    ' [' + limitBytes(id, 45) + ']';
+    ' [' + uniqueId + ']';
 
   for (const outputFormat of requestedFormats) {
     const dest = path.join(outputDirs[outputFormat], baseName + '.' + outputFormat);

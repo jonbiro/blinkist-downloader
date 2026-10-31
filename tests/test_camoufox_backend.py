@@ -177,6 +177,33 @@ class Helpers(unittest.TestCase):
         repaired = {'readerComplete': True, 'chapters': list(previous['chapters'])}
         self.assertIs(select_saved_manifest(previous, repaired), repaired)
 
+    def test_short_retry_refreshes_matching_signed_media_links(self):
+        previous = {
+            'readerComplete': True,
+            'chapters': [
+                {'name': 'Introduction', 'title': 'Intro',
+                 'audio': 'https://cdn.example/expired', 'fileName': '001 - Introduction.m4a'},
+                {'name': 'Key idea 1', 'title': 'Idea',
+                 'audio': 'https://cdn.example/expired2', 'fileName': '002 - Key idea 1.m4a'},
+                {'name': 'Summary', 'audio': 'https://cdn.example/expired3'},
+            ],
+        }
+        partial = {
+            'readerComplete': False,
+            'chapters': [
+                {'name': 'Introduction', 'title': 'Intro',
+                 'audio': 'https://cdn.example/new'},
+                {'name': 'Key idea 1', 'title': 'DIFFERENT TITLE',
+                 'audio': 'https://cdn.example/not-matching'},
+            ],
+        }
+        selected = select_saved_manifest(previous, partial)
+        self.assertEqual(len(selected['chapters']), 3)
+        self.assertEqual(selected['chapters'][0]['audio'], 'https://cdn.example/new')
+        self.assertEqual(selected['chapters'][0]['fileName'], '001 - Introduction.m4a')
+        self.assertEqual(selected['chapters'][1]['audio'], 'https://cdn.example/expired2')
+        self.assertEqual(previous['chapters'][0]['audio'], 'https://cdn.example/expired')
+
     def test_reader_must_start_at_introduction_to_be_complete(self):
         self.assertFalse(reached_complete_summary([
             {"name": "Key idea 4"}, {"name": "Summary"},

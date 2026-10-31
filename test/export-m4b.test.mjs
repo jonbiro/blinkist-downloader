@@ -243,3 +243,74 @@ test('rejects old false-positive reader completion that started in the middle', 
     assert.equal(fs.existsSync(path.join(home, 'books', 'm4b')), false);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+test('different long book IDs cannot overwrite the same output filename', { skip: !hasTools }, () => {
+  const home = root();
+  try {
+    const ids = ['a'.repeat(52) + '-first', 'a'.repeat(52) + '-second'];
+    for (const [idx, id] of ids.entries()) {
+      const dir = path.join(home, 'books', 'saved', id);
+      fs.mkdirSync(dir, {recursive: true});
+      fs.writeFileSync(path.join(dir, 'book.json'), JSON.stringify({
+        id, title: exampleTitle, author: exampleAuthor, readerComplete: true,
+        chapters: [
+          {name: 'Introduction', audio: 'https://example.invalid/a.m4a'},
+          {name: 'Summary', audio: 'https://example.invalid/b.m4a'},
+        ],
+      }));
+      createAudio(dir, 'Introduction', 400 + idx * 200);
+      createAudio(dir, 'Summary', 500 + idx * 200);
+    }
+    const result = run(home);
+    assert.equal(result.status, 0, result.stderr);
+    const files = fs.readdirSync(path.join(home, 'books', 'm4b')).filter(x => x.endsWith('.m4b'));
+    assert.equal(files.length, 2, 'Different book IDs must never share an output filename');
+    assert.match(result.stdout, /2 exported, 0 skipped, 0 failed/);
+  } finally { fs.rmSync(home, {recursive: true, force: true}); }
+});
+
+test('single-book and title-search export filters never process unrelated books', { skip: !hasTools }, () => {
+  const home = root();
+  try {
+    const first = createBook(home, ['Introduction', 'Summary']);
+    createAudio(first, 'Introduction', 440);
+    createAudio(first, 'Summary', 660);
+    const otherId = 'unrelated-book-en';
+    const second = path.join(home, 'books', 'saved', otherId);
+    fs.mkdirSync(second, { recursive: true });
+    fs.writeFileSync(path.join(second, 'book.json'), JSON.stringify({
+      id: otherId, title: 'A Different Topic', author: 'Jane Author',
+      readerComplete: true,
+      chapters: [
+        {name:'Introduction', audio:'https://cdn.example.test/a.m4a'},
+        {name:'Summary', audio:'https://cdn.example.test/b.m4a'},
+      ],
+    }));
+    createAudio(second, 'Introduction', 540);
+    createAudio(second, 'Summary', 850);
+
+    const listing = run(home, 'm4b', ['--list']);
+    assert.equal(listing.status, 0, listing.stderr);
+    assert.match(listing.stdout, /focus-en/);
+    assert.match(listing.stdout, /unrelated-book-en/);
+    assert.equal(fs.existsSync(path.join(home, 'books', 'm4b')), false);
+
+    const one = run(home, 'm4b', ['--book', otherId]);
+    assert.equal(one.status, 0, one.stderr);
+    assert.match(one.stdout, /1 exported, 0 skipped, 0 failed/);
+    let outputs = fs.readdirSync(path.join(home, 'books', 'm4b'));
+    assert.equal(outputs.length, 1);
+    assert.match(outputs[0], /unrelated-book-en/);
+
+    const searched = run(home, 'm4b', ['--search', 'future']);
+    assert.equal(searched.status, 0, searched.stderr);
+    outputs = fs.readdirSync(path.join(home, 'books', 'm4b'));
+    assert.equal(outputs.length, 2);
+    assert.match(searched.stdout, /1 exported, 0 skipped, 0 failed/);
+
+    const missing = run(home, 'm4b', ['--book', 'does-not-exist']);
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /No matching local books/);
+    assert.equal(fs.readdirSync(path.join(home, 'books', 'm4b')).length, 2);
+  } finally { fs.rmSync(home, {recursive: true, force: true}); }
+});
