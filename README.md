@@ -128,3 +128,20 @@ See [the audio export guide](MP3_EXPORT.md) for MP3/M4B compatibility and chapte
 - Do not commit `books/`, `browser/`, or `.env`; they can contain copyrighted content and private session data.
 
 Original project and license: [vogler/blinkist-downloader](https://github.com/vogler/blinkist-downloader).
+
+## Alternative browser: Camoufox (Python + Firefox)
+
+The original `npm start` continues to use Node and Google Chrome. There is now also an optional **Python Camoufox backend** inspired by Seldos's Firefox implementation. It downloads to the same local `books/` structure so the existing MP3/M4B exporter works with either backend. Camoufox's Python API uses the Playwright protocol internally, but it launches a different Firefox-based browser and does not require Node for scanning/downloading.
+
+To install and test it on macOS:
+
+```sh
+python3 -m venv .venv-camoufox
+source .venv-camoufox/bin/activate
+python -m pip install -r requirements-camoufox.txt
+python -m camoufox fetch
+python -m camoufox_backend --smoke-test
+python -m camoufox_backend --max-books 1 --diagnose
+```
+
+Camoufox has a separate persistent login profile in `browser-camoufox/` (Git-ignored), does not perform automated sign-in or CAPTCHA solving, and **limits the first run to one pending book by default**. Do not run both backends concurrently. For comprehensive options, limitations, and offline tests, see [Camoufox setup](docs/CAMOUFOX.md). MP3/M4B exports still use the same Node/FFmpeg commands, and GitHub Actions remains disabled.

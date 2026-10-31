@@ -4,3 +4,9 @@ books/
 .env
 .DS_Store
 .env.local
+
+browser-camoufox/
+.venv-camoufox/
+__pycache__/
+*.py[cod]
+.pytest_cache/

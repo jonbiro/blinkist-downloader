@@ -1,0 +1,5 @@
+# Optional Python backend. Camoufox itself depends on Python Playwright,
+# but launches a modified Firefox browser instead of the Node/Chrome backend.
+# Stable published 2026-10-06; update deliberately after local validation.
+camoufox==0.5.8
+python-dotenv>=1.0,<2
