@@ -25,8 +25,8 @@
     "export:m4b": "node ./scripts/export-audio.mjs --format m4b",
     "export:both": "node ./scripts/export-audio.mjs --format both",
     "test:m4b": "node --test ./test/export-m4b.test.mjs",
-    "start:camoufox": "python3 -m camoufox_backend",
-    "test:camoufox": "python3 -m unittest discover -s tests -p test_camoufox_backend.py -v"
+    "start:camoufox": "node ./scripts/run-camoufox.mjs",
+    "test:camoufox": "node ./scripts/run-camoufox.mjs --offline-tests"
   },
   "dependencies": {
     "chalk": "^5.3.0",

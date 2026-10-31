@@ -6,41 +6,43 @@ Camoufox runs a modified Firefox browser using **Python**. Its Python integratio
 
 ## Installation (macOS)
 
-From the repo root:
+From the repository root, use Python **3.12** inside a project-local environment. The Mac's default `python3` may be newer and may not have Camoufox installed.
 
 ```sh
-python3 -m venv .venv-camoufox
-source .venv-camoufox/bin/activate
-python -m pip install -r requirements-camoufox.txt
-python -m camoufox fetch
-python -m camoufox_backend --smoke-test
+uv venv --python 3.12 .venv-camoufox
+uv pip install --python .venv-camoufox/bin/python -r requirements-camoufox.txt
+.venv-camoufox/bin/python -m camoufox fetch
+SHOW=0 npm run start:camoufox -- --smoke-test
+npm run test:camoufox
 ```
 
-The browser download is separate from Google Chrome and is not performed by `pip install`. Camoufox requires Python 3.10 or newer. The pinned version is the October 2026 stable `0.5.8`; no prerelease or auto-update is needed. A browser launch is not verified until the **smoke test** succeeds on your machine.
+Install [uv](https://docs.astral.sh/uv/) if necessary; alternatively create `.venv-camoufox` using Python 3.12's `venv` and install the requirements with its own `pip`. The first Camoufox Firefox download is approximately **1.3 GB**. The Python package is pinned to `camoufox==0.5.8`, which selects its paired browser build. On the connected Mac, the real headless Firefox **smoke test passed on an offline `data:` page**. No Blinkist login or live download was involved.
+
+The `npm run start:camoufox` alias automatically selects `.venv-camoufox` without activating it; using `.venv-camoufox/bin/python -m camoufox_backend` directly avoids Node entirely.
 
 ## Run
 
 ```sh
-# Use visible Firefox; manually log in when prompted. Limits downloads to ONE book by default.
-python -m camoufox_backend
+# Use visible Firefox; manually sign in. Limits download attempts to ONE book by default.
+npm run start:camoufox
 
-# Scan Saved and Finished without downloading audio or books
-python -m camoufox_backend --list-only
+# Scan Saved and Finished without downloading any books
+npm run start:camoufox -- --list-only
 
-# Preview without changing books/db.json or creating audio files
-python -m camoufox_backend --dry-run
+# Preview without writing to books/db.json or downloading media
+npm run start:camoufox -- --dry-run
 
-# One-book test with redacted reader diagnostics
-python -m camoufox_backend --max-books 1 --diagnose
+# Controlled one-book test with redacted reader diagnostics
+npm run start:camoufox -- --max-books 1 --diagnose
 
-# After confirming it works, explicitly enable more books
-python -m camoufox_backend --max-books 10
+# Only after verifying one-book downloads, allow 10 pending books
+npm run start:camoufox -- --max-books 10
 
-# (Use only when authorized and ready) No per-run book limit
-python -m camoufox_backend --max-books 0
+# Advanced: direct Python invocation (no Node needed)
+.venv-camoufox/bin/python -m camoufox_backend --max-books 1
 ```
 
-If Python is active in the virtual environment, `npm run start:camoufox` is a convenience alias for `python3 -m camoufox_backend`.
+The npm alias selects the project's `.venv-camoufox` interpreter automatically. It does **not** replace the Python downloader with Node; it only launches Python.
 
 ### Shared export
 
@@ -65,8 +67,8 @@ These commands run **offline** on saved `.m4a` files and do not access Blinkist.
 ## Local tests (no GitHub Actions)
 
 ```sh
-python -m unittest discover -s tests -p 'test_camoufox_backend.py' -v
-python -m compileall -q camoufox_backend
+npm run test:camoufox
+.venv-camoufox/bin/python -m compileall -q camoufox_backend
 ```
 
 The unit tests use a fake Camoufox context and fake web pages. No remote browser, paid GitHub Actions, Blinkist login, or Blinkist content is needed to run these tests. GitHub Actions remains disabled for this repository.

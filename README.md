@@ -133,15 +133,15 @@ Original project and license: [vogler/blinkist-downloader](https://github.com/vo
 
 The original `npm start` continues to use Node and Google Chrome. There is now also an optional **Python Camoufox backend** inspired by Seldos's Firefox implementation. It downloads to the same local `books/` structure so the existing MP3/M4B exporter works with either backend. Camoufox's Python API uses the Playwright protocol internally, but it launches a different Firefox-based browser and does not require Node for scanning/downloading.
 
-To install and test it on macOS:
+To install and test on a Mac with [uv](https://docs.astral.sh/uv/) (recommended because macOS may use a newer system Python):
 
 ```sh
-python3 -m venv .venv-camoufox
-source .venv-camoufox/bin/activate
-python -m pip install -r requirements-camoufox.txt
-python -m camoufox fetch
-python -m camoufox_backend --smoke-test
-python -m camoufox_backend --max-books 1 --diagnose
+uv venv --python 3.12 .venv-camoufox
+uv pip install --python .venv-camoufox/bin/python -r requirements-camoufox.txt
+.venv-camoufox/bin/python -m camoufox fetch
+SHOW=0 npm run start:camoufox -- --smoke-test  # offline browser test
 ```
+
+The first Camoufox browser download is substantial (approximately 1.3 GB). `npm run start:camoufox` automatically uses `.venv-camoufox` when installed; you **do not need to activate it**. For a first real test with a visible Firefox browser, use `npm run start:camoufox -- --max-books 1 --diagnose` and sign in manually. You can also use `.venv-camoufox/bin/python -m camoufox_backend` directly without Node.
 
 Camoufox has a separate persistent login profile in `browser-camoufox/` (Git-ignored), does not perform automated sign-in or CAPTCHA solving, and **limits the first run to one pending book by default**. Do not run both backends concurrently. For comprehensive options, limitations, and offline tests, see [Camoufox setup](docs/CAMOUFOX.md). MP3/M4B exports still use the same Node/FFmpeg commands, and GitHub Actions remains disabled.
