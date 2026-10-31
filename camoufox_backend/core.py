@@ -256,6 +256,8 @@ def download_file(url: str, dest: Path, opener: Callable[..., Any] = urlopen) ->
                 if total > MAX_MEDIA_BYTES:
                     raise ValueError("Media exceeds 100 MB limit")
                 handle.write(chunk)
+            if length and total != length:
+                raise ValueError('Truncated or incomplete media response (length mismatch)')
         if not (valid_audio_file(staged) if dest.suffix.lower() == '.m4a' else valid_file(staged)):
             raise ValueError("Empty or suspiciously short media response")
         with staged.open("rb") as handle:
@@ -358,11 +360,46 @@ class Downloader:
             raise RuntimeError("Login requires a visible Camoufox browser (SHOW=1).")
         print("Sign in and complete any verification yourself in the Camoufox window.")
         deadline = time.monotonic() + self.settings.login_timeout_s
+        last_library_retry = 0.0
         while time.monotonic() < deadline:
             if self.library_ready():
                 return
+            # Login may land on the home feed instead of Saved. Once signed
+            # in, re-open Saved without interrupting the actual login form.
+            location = urlsplit(self.page.url)
+            pathname = location.path.lower()
+            route_segments = set(pathname.strip('/').split('/'))
+            is_login_form = bool(route_segments & {
+                'login', 'sign-in', 'signin', 'auth', 'authentication',
+                'register', 'signup', 'sign-up',
+            })
+            if (location.scheme == "https"
+                    and location.hostname == "www.blinkist.com"
+                    and pathname.startswith("/en/app/")
+                    and pathname != "/en/app/library/saved"
+                    and not is_login_form
+                    and time.monotonic() - last_library_retry > 5):
+                last_library_retry = time.monotonic()
+                try:
+                    self.page.goto(SAVED_URL, wait_until="domcontentloaded")
+                    if self.library_ready():
+                        return
+                except Exception:
+                    pass
             self.page.wait_for_timeout(1000)
         raise RuntimeError("Could not verify the Saved library; no books were downloaded.")
+
+    def _wait_for_library_page(self, list_name: str) -> None:
+        """Wait for the client-rendered cards/heading, not just DOMContentLoaded."""
+        deadline = time.monotonic() + 8
+        while True:
+            cards = self.page.locator(BOOK_CARD_SELECTOR).count()
+            headings = self.page.locator("h1,h2,h3").all()
+            if cards or any(optional_text(h).strip().lower() == list_name for h in headings):
+                return
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Library did not render book cards or the expected heading")
+            self.page.wait_for_timeout(200)
 
     def scan(self, list_name: str) -> int:
         url = BASE_URL + "/en/app/library/" + list_name
@@ -375,6 +412,7 @@ class Downloader:
         new_books: list[dict[str, Any]] = []
         pages_seen: set[str] = set()
         for page_number in range(1, 251):
+            self._wait_for_library_page(list_name)
             all_cards = self.page.locator(BOOK_CARD_SELECTOR)
             cards = all_cards.all()
             heading = self.page.locator("h1,h2,h3").all()

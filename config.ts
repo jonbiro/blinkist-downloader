@@ -14,6 +14,7 @@ export const cfg = {
   height: Number(process.env.HEIGHT) || 1280, // height of the opened browser
   timeout: (Number(process.env.TIMEOUT) || 30) * 1000, // default timeout for playwright is 30s
   browserDir: process.env.BROWSER_DIR || 'browser', // for multiple accounts or testing
+  booksDir: process.env.BOOKS_DIR || 'books', // same library directory as the Python backend and offline exporter
   // Prefer installed Chrome on macOS; upstream's pinned 2024 Chromium build may no longer download.
   browserChannel: process.env.BROWSER_CHANNEL || (process.platform === 'darwin' && existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') ? 'chrome' : undefined),
   update: process.env.UPDATE != '0', // set to 0 to disable updating library

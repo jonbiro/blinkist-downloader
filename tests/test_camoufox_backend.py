@@ -220,6 +220,10 @@ class Helpers(unittest.TestCase):
             def too_big(url, timeout): return FakeHttp(b'0' * 512, length=101 * 1024 * 1024)
             with self.assertRaises(ValueError):
                 download_file('https://media.example.com/signed.m4a', path, too_big)
+            def truncated(url, timeout): return FakeHttp(FAKE_AUDIO[:300], length=len(FAKE_AUDIO))
+            with self.assertRaisesRegex(ValueError, 'truncated|incomplete|length'):
+                download_file('https://media.example.com/signed.m4a', path, truncated)
+            self.assertEqual(path.stat().st_size, 512)
 
     def test_corrupt_audio_and_misclassified_saved_manifests_are_incomplete(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -237,6 +241,29 @@ class Helpers(unittest.TestCase):
             self.assertTrue(complete_book(book, directory, True))
             book['chapters'][0]['name'] = 'Key idea 3'
             self.assertFalse(complete_book(book, directory, False))
+
+    def test_library_scanner_waits_for_delayed_client_side_rendering(self):
+        class LateRenderedLibrary(FakePage):
+            def __init__(self):
+                super().__init__([[fake_card('ready-after-render-en')]])
+                self.rendered = False
+                self.waits = 0
+
+            def locator(self, selector):
+                if not self.rendered and selector in ('a[data-test-id="book-card"]', 'h1,h2,h3'):
+                    return Locator([])
+                return super().locator(selector)
+
+            def wait_for_timeout(self, milliseconds):
+                self.waits += 1
+                self.rendered = True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            page = LateRenderedLibrary()
+            worker = Downloader(Settings(books_dir=Path(tmp) / 'books'), page)
+            self.assertEqual(worker.scan('saved'), 1)
+            self.assertGreater(page.waits, 0)
+            self.assertEqual(worker.db['saved'][0]['id'], 'ready-after-render-en')
 
     def test_scanner_checkpoints_each_page_and_skips_duplicates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -294,6 +321,35 @@ class Helpers(unittest.TestCase):
             worker.download_book = lambda list_name, book: attempted.append(book['id']) or True
             self.assertEqual(worker.run(), 0)
             self.assertEqual(attempted, ['corrupt-en'])
+
+    def test_login_follows_authenticated_home_redirect_back_to_saved(self):
+        class LoginRedirect:
+            def __init__(self):
+                self.url = 'https://www.blinkist.com/en/login'
+                self.navigations = 0
+
+            def goto(self, url, wait_until='domcontentloaded'):
+                self.navigations += 1
+                if self.navigations == 1:
+                    self.url = 'https://www.blinkist.com/en/login'
+                else:
+                    self.url = url
+
+            def title(self):
+                return 'Blinkist'
+
+            def locator(self, selector):
+                return Locator([Locator('Saved')] if self.url.endswith('/library/saved') else [])
+
+            def wait_for_timeout(self, milliseconds):
+                self.url = 'https://www.blinkist.com/en/app/authors'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            page = LoginRedirect()
+            worker = Downloader(Settings(books_dir=Path(tmp) / 'books', login_timeout_s=5), page)
+            worker.login()
+            self.assertEqual(page.navigations, 2)
+            self.assertEqual(page.url, 'https://www.blinkist.com/en/app/library/saved')
 
     def test_camoufox_starts_with_its_own_persistent_profile(self):
         from camoufox_backend import __main__ as cli

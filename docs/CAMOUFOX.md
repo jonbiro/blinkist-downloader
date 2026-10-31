@@ -58,8 +58,8 @@ These commands run **offline** on saved `.m4a` files and do not access Blinkist.
 ### Profiles, privacy and compatibility
 
 - Camoufox uses `browser-camoufox/` as its own persistent login profile; it never opens the Node backend's `browser/` Chrome profile. Both directories, `books/`, and `.venv-camoufox/` are Git-ignored.
-- It expects manual login. It does not solve CAPTCHA challenges, decrypt DRM, bypass subscription checks, or copy signed URLs into public logs.
-- It writes `readerComplete`, `fileName`, `audio`, `audioSource`, and chapter text in the same JSON shape as the Node downloader. It requires a confirmed Introduction-to-Summary traversal, validates basic media signatures, preserves better prior manifests on interrupted retries, and retries corrupt previous `book.json` files.
+- It expects manual login, can return to Saved when login lands on a home feed, and waits briefly for the library's client-rendered cards. It does not solve CAPTCHA challenges, decrypt DRM, bypass subscription checks, or copy signed URLs into public logs.
+- It writes `readerComplete`, `fileName`, `audio`, `audioSource`, and chapter text in the same JSON shape as the Node downloader. It requires a confirmed Introduction-to-Summary traversal, validates basic media signatures, rejects shorter-than-advertised HTTP responses, preserves better prior manifests on interrupted retries, and retries corrupt previous `book.json` files.
 - Settings can be passed with environment variables (`BOOKS_DIR`, `CAMOUFOX_PROFILE`, `SHOW`, `MAX_BOOKS`, `UPDATE`, `DOWNLOAD`, `AUDIO`, `CHECKALL`, `CAPTURE_AUDIO`, `DIAGNOSE`, `TIMEOUT`) or through the documented command-line flags. The Python backend's **default** `MAX_BOOKS` is **1** for safety. `--max-books 0` means unlimited.
 - Only the `books/` folder is shared; do **not run both browser backends simultaneously** against it.
 - The code and offline test harness have been reviewed locally; a real signed-in browser integration has **not** been demonstrated against the current Blinkist site. Site layout, reader/audio controls, and Blinkist subscription terms may differ.

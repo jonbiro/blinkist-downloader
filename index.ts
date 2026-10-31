@@ -11,6 +11,7 @@ import { ChapterAudioMonitor, chooseAudioSource } from './lib/audio-capture.js';
 import { scanLibrary } from './lib/library-scan.js';
 import { collectReaderDiagnostics } from './lib/reader-diagnostics.js';
 import { openLibraryDatabase } from './lib/database.js';
+import { downloadMediaFile } from './lib/media-download.js';
 
 type library = 'saved' | 'finished';
 type book = {
@@ -26,7 +27,7 @@ type book = {
 
 // Opening a dry run must not create books/ or books/db.json.
 const defaultData: { guides: book[], saved: book[], finished: book[] } = { guides: [], saved: [], finished: [] };
-const db = await openLibraryDatabase('books/db.json', defaultData, cfg.dryrun);
+const db = await openLibraryDatabase(path.join(cfg.booksDir, 'db.json'), defaultData, cfg.dryrun);
 
 const SAVED_LIBRARY = 'https://www.blinkist.com/en/app/library/saved';
 
@@ -76,36 +77,6 @@ const isComplete = (bookJson: string, bookDir: string) => {
   } catch { return false; }
 };
 
-const downloadFile = async (url: string, file: string) => {
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const tmp = file + '.part';
-    try {
-      if (!url.startsWith('https://')) throw new Error('Media URL must use HTTPS');
-      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
-      if (!res.ok) throw new Error(`HTTP ${res.status} (${res.statusText})`);
-      const mime = (res.headers.get('content-type') ?? '').toLowerCase();
-      if (mime.startsWith('text/') || mime.includes('application/json'))
-        throw new Error(`Unexpected response type ${mime}; not an audio/image file`);
-      const maxSize = 100 * 1024 * 1024;
-      if (Number(res.headers.get('content-length') || 0) > maxSize) throw new Error('Media file exceeds 100 MB limit');
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      if (bytes.length <= 128 || bytes.length > maxSize) throw new Error('Empty, unexpectedly short, or oversized media file');
-      const prefix = Buffer.from(bytes.subarray(0, 96)).toString('utf8').trimStart().toLowerCase();
-      if (prefix.startsWith('<html') || prefix.startsWith('<!doctype html') || prefix.startsWith('{"error"'))
-        throw new Error('Remote server returned HTML/JSON instead of media');
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(tmp, bytes);
-      if (file.endsWith('.m4a') && !validAudioFile(tmp)) throw new Error('Unrecognized audio header');
-      fs.renameSync(tmp, file);
-      return;
-    } catch (error) {
-      fs.rmSync(tmp, { force: true });
-      if (attempt === 3) throw error;
-      await new Promise(resolve => setTimeout(resolve, 500 * attempt));
-    }
-  }
-};
-
 const downloadBooks = async (page: Page, list: library = 'saved') => {
   const dbList = db.data[list]; // sorted by date added ascending
   console.log('Check/download new books:', list);
@@ -119,8 +90,8 @@ const downloadBooks = async (page: Page, list: library = 'saved') => {
       console.warn('Skipping unexpected/off-site book URL:', book.id);
       continue;
     }
-    const bookDir = 'books/' + list + '/' + book.id + '/';
-    const bookJson = bookDir + 'book.json';
+    const bookDir = path.join(cfg.booksDir, list, book.id);
+    const bookJson = path.join(bookDir, 'book.json');
     const complete = isComplete(bookJson, bookDir);
     console.log(`Book ${i}:`, book.id, complete ? chalk.green('complete') : chalk.yellow('needs download/resume'));
     if (complete) continue;
@@ -236,7 +207,7 @@ const downloadBooks = async (page: Page, list: library = 'saved') => {
           if (cfg.audio && audio) {
             const file = audioFilePath(bookDir, chapter);
             if (file && !validAudioFile(file)) {
-              await downloadFile(audio, file).catch(error =>
+              await downloadMediaFile(audio, file).catch(error =>
                 console.warn('Audio failed for ' + book.id + ' / ' + name + ':', error));
             }
           }
@@ -287,14 +258,19 @@ const downloadBooks = async (page: Page, list: library = 'saved') => {
     fs.writeFileSync(jsonPart, JSON.stringify(selected, null, 2));
     fs.renameSync(jsonPart, bookJson);
     if (!readerComplete) console.warn('Incomplete reader traversal:', book.id);
-    if (book.img && !validMediaFile(bookDir + 'cover.png'))
-      await downloadFile(book.img, bookDir + 'cover.png').catch(err => console.warn('Cover failed:', err));
+    if (book.img && !validMediaFile(path.join(bookDir, 'cover.png'))) {
+      let coverUrl: string | null = null;
+      try { coverUrl = new URL(book.img, 'https://www.blinkist.com').toString(); }
+      catch { /* invalid or missing cover URL */ }
+      if (coverUrl) await downloadMediaFile(coverUrl, path.join(bookDir, 'cover.png'))
+        .catch(err => console.warn('Cover failed:', err));
+    }
     if (cfg.audio) {
       console.log('Downloading audio files:', chapters.filter(c => c.audio).length);
       for (const chapter of chapters) {
         const file = audioFilePath(bookDir, chapter);
         if (!chapter.audio || !file || validAudioFile(file)) continue;
-        await downloadFile(chapter.audio, file).catch(err =>
+        await downloadMediaFile(chapter.audio, file).catch(err =>
           console.warn('Audio failed for ' + book.id + ' / ' + chapter.name + ':', err));
       }
       if (!chapters.some(c => c.audio))
